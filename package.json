@@ -1,0 +1,25 @@
+{
+  "name": "zero-dom-table",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/differential.test.js && node test/observe.test.js && node test/pipeline.test.js && node test/tree.test.js && node test/join.test.js",
+    "dev": "vite serve demo",
+    "build": "vite build demo"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@rocicorp/zero": "^1.5.0",
+    "fractional-indexing": "^3.2.0",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.9.0",
+    "vite": "^8.0.16",
+    "vite-plugin-solid": "^2.11.12"
+  }
+}
