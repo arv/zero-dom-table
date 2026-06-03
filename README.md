@@ -16,7 +16,7 @@ Two flavors:
    back up. A DOM `Node` has `childNodes` that are `Node`s; a Zero IVM `Node` has
    `relationships` you drill into — same shape, now wired together.
 
-There's a **[Vite + Solid demo](demo/)**: `npm run dev`, then edit a live
+There's a **[Vite + Solid demo](demo/)**: `pnpm dev`, then edit a live
 `contenteditable` DOM tree and watch the recursive Zero query update beside it — and
 click a node to tag it from a **separate `label` source joined in** via `node.related('labels')`.
 
@@ -29,8 +29,8 @@ click a node to tag it from a **separate `label` source joined in** via `node.re
 ## Status: works, proven by tests
 
 ```
-npm install
-npm test
+pnpm install
+pnpm test
 ```
 
 Five suites, all green:
@@ -157,8 +157,8 @@ from `data-v` is honored — so `contenteditable` Just Works.
 ## Demo
 
 ```
-npm run dev      # Vite + Solid, http://localhost:5173
-npm run build    # production bundle (proves the internals bundle for the browser)
+pnpm dev      # Vite + Solid, http://localhost:5173
+pnpm build    # production bundle (proves the internals bundle for the browser)
 ```
 
 Edit the `contenteditable` DOM tree on the left; the right pane is a live
@@ -169,3 +169,9 @@ visualizes that `label` source as its own table, with a `→ node` column driven
 **inverse** relationship `label.related('node')` (a `one()`) — a join in the other
 direction, resolved live from the DOM source (rename a node and watch the table update).
 See [demo/src/App.jsx](demo/src/App.jsx).
+
+## License
+
+[Apache-2.0](LICENSE) © Erik Arvidsson. Note this is an experiment that reaches into
+`@rocicorp/zero`'s unpublished internals (see "The hack"); Zero itself is separately
+licensed by Rocicorp.

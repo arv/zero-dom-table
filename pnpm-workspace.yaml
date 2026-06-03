@@ -1,0 +1,8 @@
+# These deps ship postinstall build scripts that pnpm blocks by default. This
+# project needs none of them built: esbuild resolves its platform binary on its
+# own, and the sqlite/protobuf bits aren't used by the IVM-only code here.
+# Explicitly declining keeps `pnpm install` / `pnpm <script>` from erroring.
+allowBuilds:
+  '@rocicorp/zero-sqlite3': false
+  esbuild: false
+  protobufjs: false

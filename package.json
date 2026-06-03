@@ -1,17 +1,21 @@
 {
   "name": "zero-dom-table",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Experimental Rocicorp Zero IVM Sources backed by the DOM — a flat table and a DOM tree with childNodes/parentNode relationships, cross-source joins, and a Vite + Solid demo.",
+  "type": "module",
   "scripts": {
     "test": "node test/differential.test.js && node test/observe.test.js && node test/pipeline.test.js && node test/tree.test.js && node test/join.test.js",
     "dev": "vite serve demo",
     "build": "vite build demo"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
+  "keywords": ["zero", "rocicorp", "incremental-view-maintenance", "dom", "solid"],
+  "author": "Erik Arvidsson",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arv/zero-dom-table.git"
+  },
+  "packageManager": "pnpm@11.3.0",
   "dependencies": {
     "@rocicorp/zero": "^1.5.0",
     "fractional-indexing": "^3.2.0",
