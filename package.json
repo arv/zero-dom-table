@@ -4,11 +4,17 @@
   "description": "Experimental Rocicorp Zero IVM Sources backed by the DOM — a flat table and a DOM tree with childNodes/parentNode relationships, cross-source joins, and a Vite + Solid demo.",
   "type": "module",
   "scripts": {
-    "test": "node test/differential.test.js && node test/observe.test.js && node test/pipeline.test.js && node test/tree.test.js && node test/join.test.js",
+    "test": "node test/differential.test.js && node test/observe.test.js && node test/pipeline.test.js && node test/tree.test.js && node test/join.test.js && node test/tanstack.test.js",
     "dev": "vite serve demo",
     "build": "vite build demo"
   },
-  "keywords": ["zero", "rocicorp", "incremental-view-maintenance", "dom", "solid"],
+  "keywords": [
+    "zero",
+    "rocicorp",
+    "incremental-view-maintenance",
+    "dom",
+    "solid"
+  ],
   "author": "Erik Arvidsson",
   "license": "Apache-2.0",
   "repository": {
@@ -18,6 +24,7 @@
   "packageManager": "pnpm@11.3.0",
   "dependencies": {
     "@rocicorp/zero": "^1.5.0",
+    "@tanstack/query-core": "^5.100.14",
     "fractional-indexing": "^3.2.0",
     "solid-js": "^1.9.13"
   },

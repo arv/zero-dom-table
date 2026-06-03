@@ -17,8 +17,9 @@ Two flavors:
    `relationships` you drill into — same shape, now wired together.
 
 There's a **[Vite + Solid demo](demo/)**: `pnpm dev`, then edit a live
-`contenteditable` DOM tree and watch the recursive Zero query update beside it — and
-click a node to tag it from a **separate `label` source joined in** via `node.related('labels')`.
+`contenteditable` DOM tree and watch the recursive Zero query update beside it — joined,
+in one query, against **two more sources**: an in-memory `label` source (click a node to tag
+it) and an **async/remote `tag` source fetched via [TanStack Query](https://tanstack.com/query)**.
 
 ```
    source.push(change)  ───▶  DOM mutates (<tr> insert/remove)  ───▶  query results
@@ -33,7 +34,7 @@ pnpm install
 pnpm test
 ```
 
-Five suites, all green:
+Six suites, all green:
 
 | Suite | What it proves |
 | --- | --- |
@@ -42,6 +43,7 @@ Five suites, all green:
 | `test/pipeline.test.js` | A **real** Zero pipeline (`buildPipeline` → Filter + sort operators → materialized `ArrayView`) running `item.where('score','>=',10).orderBy('score','desc')` on the DOM-backed source, updated by both `push()` and direct DOM edits. |
 | `test/tree.test.js` | A recursive **`childNodes`** (`many`) query over a real DOM tree materializes a nested view of Element + Text nodes that mirrors the DOM, matches a from-scratch `MemorySource` oracle, drills back up via **`parentNode`** (`one`), updates live on DOM append / in-place text edit / subtree removal, and **keeps node identity across a move** (id stable, only `parentId`/`order` change). |
 | `test/join.test.js` | **Combining sources**: a single query joins the DOM-backed `node` source with a separate in-memory `label` source via `node.related('labels')`. Labels appear on the right nodes, update as the label source changes, and stay attached across DOM edits (the join is by stable node `id`). |
+| `test/tanstack.test.js` | **TanStack Query as a source**: two independent TanStack queries (`users`, `teams`) joined via `user.related('team')`. The join is live as either query refetches (rename a team → every joined user updates; add/move a user → flows through), and plain `where`/`orderBy` works over a fetched collection. |
 
 ## How it works
 
@@ -118,6 +120,36 @@ source — the join operator doesn't care that one side is a DOM tree and the ot
 to a node even as you edit its text or move it. In the demo, click any node to tag it and
 click a chip to remove it; the tags live entirely in the other source.
 
+### Async sources: TanStack Query (and any reactive `Row[]`)
+
+The DOM and in-memory sources are synchronous. For *async/observable* collections there's a
+second tier: [src/collection-source.js](src/collection-source.js) — `collectionSource(table,
+{ getRows, subscribe })` — keeps an internal `MemorySource` and, whenever the snapshot
+changes, diffs it by primary key and pushes the deltas (this is `DOMTreeSource.syncFromDOM`,
+generalized). Any reactive `Row[]` becomes a Source: a signal, an RxJS stream, a WebSocket
+feed, a plain `useState` array — or **TanStack Query**:
+
+```js
+// src/tanstack-source.js — ~10 lines over collectionSource
+const source = tanstackSource(table, queryClient, { queryKey, queryFn });
+// internally: getRows = () => observer.getCurrentResult().data ?? [];
+//             subscribe = onChange => observer.subscribe(onChange);
+```
+
+Now a TanStack query result is a live Zero Source — joinable against every other source and
+incrementally maintained as it refetches. The demo's third source is exactly this: a `tag`
+table fetched from a (fake) remote API, joined as `node.related('tag')` to put an emoji on
+every node by `nodeName`. Hit **refetch** and the “server” returns a different emoji set;
+every matching node updates through the join. So the demo joins **three kinds of source at
+once** — live DOM (`node`), in-memory (`label`), and async/remote (`tag`).
+
+The mental model: this is **Zero the query/IVM engine**, not Zero the sync engine. It's
+read/derive only (writes go through TanStack's mutations, then flow back in via `getRows`),
+filtering is client-side/post-fetch (push selectivity into the `queryKey`), and “loading”
+lives in TanStack (`isFetching`), since IVM has no loading state — an unresolved query just
+looks like an empty source. What you get is ZQL **joins, relationships, sorting, and derived
+incremental views** over data you fetched yourself.
+
 ### The hack
 
 The IVM internals we reuse (`MemorySource`, `buildPipeline`, `ArrayView`,
@@ -162,12 +194,17 @@ pnpm build    # production bundle (proves the internals bundle for the browser)
 ```
 
 Edit the `contenteditable` DOM tree on the left; the right pane is a live
-`node.related('childNodes', …).related('labels', …)` Zero query rendered with Solid,
-updated incrementally via a `MutationObserver` → `syncFromDOM()`. **Click any node to tag
-it** — tags live in a separate in-memory `label` source and are joined in. The panel below
-visualizes that `label` source as its own table, with a `→ node` column driven by the
-**inverse** relationship `label.related('node')` (a `one()`) — a join in the other
-direction, resolved live from the DOM source (rename a node and watch the table update).
+`node.related('childNodes', …).related('labels', …).related('tag')` Zero query rendered with
+Solid — **a join across three kinds of source** (live DOM, in-memory, async/remote),
+updated incrementally via a `MutationObserver` → `syncFromDOM()`:
+
+- **Click any node to tag it** — tags live in a separate in-memory `label` source. The panel
+  below visualizes that source as its own table, with a `→ node` column driven by the
+  **inverse** relationship `label.related('node')` (a `one()`) — resolved live from the DOM
+  source (rename a node and watch the table update).
+- The emoji on each node comes from a **TanStack Query** `tag` source (a fake remote API,
+  joined by `nodeName`). Hit **refetch** and every matching node updates through the join.
+
 See [demo/src/App.jsx](demo/src/App.jsx).
 
 ## License

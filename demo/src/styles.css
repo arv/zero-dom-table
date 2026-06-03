@@ -124,6 +124,24 @@ button:hover { border-color: var(--accent); }
 .type { color: var(--muted); font-size: 11px; }
 .value { color: var(--text); opacity: .85; }
 .empty { color: var(--muted); }
+.emoji { font-size: 13px; line-height: 1; }
+
+/* remote (TanStack) tag source status bar */
+.tag-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tag-bar .tag-status { color: var(--text-node); font-variant-numeric: tabular-nums; }
+.tag-bar button { margin-left: auto; }
+.tag-bar button:disabled { opacity: .5; cursor: default; }
 
 .node > .row { cursor: pointer; border-radius: 6px; }
 .node > .row:hover { background: #ffffff08; }

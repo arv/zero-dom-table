@@ -11,6 +11,9 @@ importers:
       '@rocicorp/zero':
         specifier: ^1.5.0
         version: 1.5.0(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))
+      '@tanstack/query-core':
+        specifier: ^5.100.14
+        version: 5.100.14
       fractional-indexing:
         specifier: ^3.2.0
         version: 3.2.0
@@ -1156,6 +1159,9 @@ packages:
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
+
+  '@tanstack/query-core@5.100.14':
+    resolution: {integrity: sha512-5X41dGpxgeaHISCRW2oYwcSycZeULZzAunaudXT9ov1KOTj9xwt0CH6hbwqP1/z74ZWF7rYFnDpyYH07XFcZew==}
 
   '@tybys/wasm-util@0.10.2':
     resolution: {integrity: sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg==}
@@ -3651,6 +3657,8 @@ snapshots:
   '@rolldown/pluginutils@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
+
+  '@tanstack/query-core@5.100.14': {}
 
   '@tybys/wasm-util@0.10.2':
     dependencies:

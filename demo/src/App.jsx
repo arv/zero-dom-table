@@ -1,14 +1,19 @@
 import {createSignal, onMount, onCleanup, For, Show} from 'solid-js';
+import {QueryClient} from '@tanstack/query-core';
 import {createBuilder} from '@rocicorp/zero';
 import {DOMTreeSource, TEXT_NODE, COMMENT_NODE} from '../../src/dom-tree-source.js';
-import {labeledSchema, createLabelSource} from '../../src/labels.js';
+import {createLabelSource} from '../../src/labels.js';
+import {taggedSchema, tagTable} from '../../src/tags.js';
+import {tanstackSource} from '../../src/tanstack-source.js';
 import {expandChildNodes, domDepth} from '../../src/tree-query.js';
 import {buildPipeline, ArrayView, MemoryStorage} from '../../src/zero-internals.js';
 
-// Route each table in a query to its own source: `node` -> the DOM-backed source,
-// `label` -> the in-memory source. This is what lets a single query join them.
-const makeDelegate = (nodeSource, labelSource) => ({
-  getSource: n => (n === 'node' ? nodeSource : n === 'label' ? labelSource : undefined),
+// Route each table in a query to its own source — three different kinds:
+//   node  -> the live DOM (DOMTreeSource)
+//   label -> in-memory, click-to-edit (MemorySource)
+//   tag   -> async/remote, via TanStack Query (tanstackSource)
+const makeDelegate = (nodeSource, labelSource, tagSource) => ({
+  getSource: n => (n === 'node' ? nodeSource : n === 'label' ? labelSource : n === 'tag' ? tagSource : undefined),
   createStorage: () => new MemoryStorage(),
   decorateInput: i => i,
   decorateFilterInput: i => i,
@@ -22,25 +27,26 @@ const materialize = (query, delegate, id) => {
   return view;
 };
 
-// View #1 — the tree: node.related('childNodes', …).related('labels', …).
+// View #1 — the tree, joining all three sources:
+//   node.related('childNodes', …).related('labels', …).related('tag')
 // Zero has no recursive queries, so `childNodes` is unrolled `depth` levels
 // (expandChildNodes), sized to the live tree and rebuilt only when it grows.
-function buildTreeView(nodeSource, labelSource, depth) {
-  const builder = createBuilder(labeledSchema);
+function buildTreeView(sources, depth) {
+  const builder = createBuilder(taggedSchema);
   const query = expandChildNodes(
     builder.node.where('parentId', 'IS', null).orderBy('order', 'asc'),
     depth,
-    q => q.related('labels', l => l.orderBy('id', 'asc')),
+    q => q.related('labels', l => l.orderBy('id', 'asc')).related('tag'),
   );
-  return materialize(query, makeDelegate(nodeSource, labelSource), 'tree');
+  return materialize(query, makeDelegate(...sources), 'tree');
 }
 
 // View #2 — the label source itself, with the INVERSE relationship resolved:
 // label.related('node') (a `one()`) joins each label back to the node it tags.
-function buildLabelView(nodeSource, labelSource) {
-  const builder = createBuilder(labeledSchema);
+function buildLabelView(sources) {
+  const builder = createBuilder(taggedSchema);
   const query = builder.label.orderBy('id', 'asc').related('node');
-  return materialize(query, makeDelegate(nodeSource, labelSource), 'labels');
+  return materialize(query, makeDelegate(...sources), 'labels');
 }
 
 const clone = e => ({
@@ -48,9 +54,26 @@ const clone = e => ({
   nodeType: e.nodeType,
   nodeName: e.nodeName,
   nodeValue: e.nodeValue ?? null,
+  emoji: e.tag?.emoji ?? null, // joined from the remote (TanStack) tag source
   labels: (e.labels ?? []).map(l => ({id: l.id, nodeId: l.nodeId, text: l.text, color: l.color})),
   childNodes: (e.childNodes ?? []).map(clone),
 });
+
+// A fake remote "tags" API: maps nodeName -> emoji. Each refetch returns the next
+// set, simulating the server changing — every matching node updates live.
+const EMOJI_SETS = [
+  {UL: '📋', LI: '•', '#text': '🔤'},
+  {UL: '📁', LI: '✅', '#text': '✍️'},
+  {UL: '🗂️', LI: '⭐', '#text': '💬'},
+];
+let serverIndex = 0;
+const fetchTags = () =>
+  new Promise(resolve =>
+    setTimeout(() => {
+      const set = EMOJI_SETS[serverIndex % EMOJI_SETS.length];
+      resolve(Object.entries(set).map(([nodeName, emoji]) => ({nodeName, emoji})));
+    }, 450), // simulated network latency
+  );
 
 const cloneLabel = l => ({
   id: l.id,
@@ -85,6 +108,7 @@ function NodeView(props) {
   return (
     <li class={`node ${kind()}`}>
       <span class="row" title="click to tag this node" onClick={() => props.api.addLabel(n())}>
+        <Show when={n().emoji}><span class="emoji" title="from the remote tag source (TanStack)">{n().emoji}</span></Show>
         <span class="badge">{n().nodeName}</span>
         <span class="type">type {n().nodeType}</span>
         <Show when={hasValue()}>
@@ -118,17 +142,30 @@ export default function App() {
   const [count, setCount] = createSignal(0);
   const [labelCount, setLabelCount] = createSignal(0);
   const [depth, setDepth] = createSignal(0);
+  const [tagFetching, setTagFetching] = createSignal(false);
+  const [tagCount, setTagCount] = createSignal(0);
   const [api, setApi] = createSignal({addLabel() {}, removeLabel() {}});
   let editorRef;
 
   onMount(() => {
     editorRef.innerHTML = SEED;
 
-    const nodeSource = new DOMTreeSource(editorRef, {schema: labeledSchema});
+    const nodeSource = new DOMTreeSource(editorRef, {schema: taggedSchema});
     const labelSource = createLabelSource();
 
+    // The remote `tag` source: a TanStack query fetching emojis by nodeName from a
+    // (fake) async API. Joined as node.related('tag').
+    const queryClient = new QueryClient({
+      defaultOptions: {queries: {staleTime: Infinity, retry: false}},
+    });
+    const tagSource = tanstackSource(taggedSchema.tables.tag, queryClient, {
+      queryKey: ['tags'],
+      queryFn: fetchTags,
+    });
+    const sources = [nodeSource, labelSource, tagSource];
+
     // The label source's own view never changes shape, so it's built once.
-    const labelView = buildLabelView(nodeSource, labelSource);
+    const labelView = buildLabelView(sources);
 
     // Self-sizing depth: Zero can't recurse, so we unroll childNodes exactly as
     // deep as the live tree and rebuild only when it grows deeper (rare).
@@ -137,7 +174,7 @@ export default function App() {
       if (view && need <= builtDepth) return false;
       builtDepth = Math.max(need, builtDepth, 2);
       view?.destroy?.();
-      view = buildTreeView(nodeSource, labelSource, builtDepth);
+      view = buildTreeView(sources, builtDepth);
       setDepth(builtDepth);
       return true;
     };
@@ -178,6 +215,19 @@ export default function App() {
       },
     });
 
+    // When the remote tag query resolves / refetches, its source pushes deltas;
+    // commit them to the tree view and re-render (emojis appear/update).
+    tagSource.onSync(() => { view.flush(); refresh(); });
+    const updateTagStatus = () => {
+      const r = tagSource.observer.getCurrentResult();
+      setTagFetching(r.isFetching);
+      setTagCount((r.data ?? []).length);
+    };
+    tagSource.observer.subscribe(updateTagStatus);
+    updateTagStatus();
+    // Refetch with the next emoji set — simulates the server changing.
+    App._refetchTags = () => { serverIndex++; tagSource.observer.refetch(); };
+
     refresh();
 
     const mo = new MutationObserver(() => {
@@ -189,7 +239,7 @@ export default function App() {
       refresh();
     });
     mo.observe(editorRef, {childList: true, subtree: true, characterData: true});
-    onCleanup(() => mo.disconnect());
+    onCleanup(() => { mo.disconnect(); tagSource.destroy(); });
 
     // expose reset that also clears labels
     App._reset = () => {
@@ -211,11 +261,12 @@ export default function App() {
       <header>
         <h1>Zero × the DOM tree</h1>
         <p>
-          Two sources, one query. The <b>node</b> table is backed by the editable DOM
-          on the left; a separate in-memory <b>label</b> source holds tags. The view on
-          the right is a live{' '}
-          <code>node.related('childNodes', …).related('labels', …)</code> — a join across
-          both sources, maintained incrementally.
+          Three sources, one query. <b>node</b> is the editable DOM on the left; <b>label</b>
+          {' '}is an in-memory source (click a node to tag it); <b>tag</b> is an{' '}
+          <b>async/remote</b> source fetched via <b>TanStack Query</b>. The view on the right
+          is a live{' '}
+          <code>node.related('childNodes', …).related('labels', …).related('tag')</code> — a
+          join across all three, maintained incrementally.
         </p>
       </header>
 
@@ -238,6 +289,13 @@ export default function App() {
             <span class="count">{count()} nodes · {labelCount()} labels · depth {depth()}</span>
           </div>
           <p class="hint">Click any node to tag it (cycles a palette) · click a chip to remove it.</p>
+          <div class="tag-bar">
+            <span>🛰️ remote <code>tag</code> source (TanStack Query):</span>
+            <span class="tag-status">{tagFetching() ? 'fetching…' : `${tagCount()} rows`}</span>
+            <button onClick={() => App._refetchTags?.()} disabled={tagFetching()}>
+              refetch (server changes the emojis)
+            </button>
+          </div>
           <ul class="result">
             <For each={tree()} fallback={<li class="empty">(empty)</li>}>
               {n => <NodeView node={n} api={api()} />}
@@ -285,7 +343,7 @@ export default function App() {
         <span class="legend"><i class="sw element" /> Element</span>
         <span class="legend"><i class="sw text" /> #text</span>
         <span class="spacer" />
-        <span><code>node</code> (DOM) ⋈ <code>label</code> (memory) · childNodes <code>many()</code> · labels <code>many()</code> · node <code>one()</code></span>
+        <span><code>node</code> (DOM) ⋈ <code>label</code> (memory) ⋈ <code>tag</code> (TanStack)</span>
       </footer>
     </main>
   );
