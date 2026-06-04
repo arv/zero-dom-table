@@ -5,63 +5,64 @@
 
 import {Window} from 'happy-dom';
 import {createBuilder} from '@rocicorp/zero';
-import {DOMTreeSource, nodeSchema, ELEMENT_NODE, TEXT_NODE} from '../src/dom-tree-source.js';
-import {expandChildNodes, domDepth} from '../src/tree-query.js';
-import {MemorySource, buildPipeline, ArrayView, MemoryStorage} from '../src/zero-internals.js';
+import {DOMTreeSource, nodeSchema, ELEMENT_NODE, TEXT_NODE} from '../src/dom-tree-source.ts';
+import {expandChildNodes, domDepth} from '../src/tree-query.ts';
+import {MemorySource, buildPipeline, ArrayView, MemoryStorage} from '../src/zero-internals.ts';
+import type {BuilderDelegate, Source} from '../src/zero-internals.ts';
+import {ADD} from '../src/change-type.ts';
 
-const window = new Window();
-const document = window.document;
-const S = v => JSON.stringify(v);
+const document: any = new Window().document;
+const S = (v: unknown): string => JSON.stringify(v);
 
 let failures = 0;
-const check = (label, actual, expected) => {
+const check = (label: string, actual: unknown, expected: unknown): void => {
   const a = S(actual), e = S(expected);
   if (a !== e) { failures++; console.error(`  ✗ ${label}\n      expected: ${e}\n      actual:   ${a}`); }
   else console.log(`  ✓ ${label}`);
 };
 
 // --- expected tree, read straight from the live DOM ----------------------
-const isWs = n => n.nodeType === TEXT_NODE && (n.nodeValue ?? '').trim() === '';
-const domTree = node => ({
+const isWs = (n: any) => n.nodeType === TEXT_NODE && (n.nodeValue ?? '').trim() === '';
+const domTree = (node: any): any => ({
   nodeName: node.nodeName,
   nodeType: node.nodeType,
   nodeValue: node.nodeValue ?? null,
   childNodes: [...node.childNodes].filter(n => !isWs(n)).map(domTree),
 });
-const viewTree = e => ({
+const viewTree = (e: any): any => ({
   nodeName: e.nodeName,
   nodeType: e.nodeType,
   nodeValue: e.nodeValue ?? null,
   childNodes: (e.childNodes ?? []).map(viewTree),
 });
 
-const delegate = source => ({
+const delegate = (source: Source): BuilderDelegate => ({
   getSource: n => (n === 'node' ? source : undefined),
   createStorage: () => new MemoryStorage(),
   decorateInput: i => i, decorateFilterInput: i => i, decorateSourceInput: i => i, addEdge: () => {},
 });
 
 const builder = createBuilder(nodeSchema);
-let rootQuery; // built once `root` exists, sized to the actual tree depth
+let rootQuery: any; // built once `root` exists, sized to the actual tree depth
 
-const materialize = (source, query = rootQuery) => {
+const materialize = (source: Source, query: any = rootQuery): any => {
   const input = buildPipeline(query.ast, delegate(source), 'tree');
   const view = new ArrayView(input, query.format, true, () => {});
   view.flush();
   return view;
 };
 
-const oracleRoots = treeSource => {
+const oracleRoots = (treeSource: DOMTreeSource): any[] => {
   const t = nodeSchema.tables.node;
   const mem = new MemorySource('node', t.columns, t.primaryKey);
-  for (const row of treeSource.currentDOMRows()) for (const _ of mem.push([0, row, null])) { /**/ }
+  for (const row of treeSource.currentDOMRows()) for (const _ of mem.push([ADD, row, null])) { /**/ }
   return materialize(mem).data.map(viewTree);
 };
 
 // --- build a DOM tree -----------------------------------------------------
 const root = document.createElement('div');
 const ul = document.createElement('ul');
-const mk = (tag, text) => { const el = document.createElement(tag); if (text) el.textContent = text; return el; };
+const mk = (tag: string, text?: string): any => { const el = document.createElement(tag); if (text) el.textContent = text; return el; };
 const fruit = mk('li', 'Fruit');
 const fruitUl = mk('ul');
 fruitUl.append(mk('li', 'Apple'), mk('li', 'Banana'));
@@ -80,14 +81,14 @@ const source = new DOMTreeSource(root);
 const view = materialize(source);
 const obs = source.observe();
 const roots = () => view.data.map(viewTree);
-const expected = () => [...root.childNodes].filter(n => !isWs(n)).map(domTree);
+const expected = () => [...root.childNodes].filter((n: any) => !isWs(n)).map(domTree);
 
 // 1. Nested Zero view mirrors the DOM (Element + Text nodes).
 check('recursive childNodes view mirrors the DOM tree', roots(), expected());
 check('matches a from-scratch MemorySource oracle', roots(), oracleRoots(source));
 
 // 2. Text nodes are first-class: the "Apple" <li> has a #text child.
-const findInView = (nodes, pred) => {
+const findInView = (nodes: any[], pred: (n: any) => boolean): any => {
   for (const n of nodes) {
     if (pred(n)) return n;
     const f = findInView(n.childNodes ?? [], pred);
@@ -95,7 +96,7 @@ const findInView = (nodes, pred) => {
   }
   return undefined;
 };
-const appleLi = findInView(view.data, n => n.nodeName === 'LI' && (n.childNodes ?? []).some(c => c.nodeValue === 'Apple'));
+const appleLi = findInView(view.data, n => n.nodeName === 'LI' && (n.childNodes ?? []).some((c: any) => c.nodeValue === 'Apple'));
 check('Element node has the right nodeName/nodeType', [appleLi.nodeName, appleLi.nodeType], ['LI', ELEMENT_NODE]);
 const appleText = appleLi.childNodes[0];
 check('its child is a #text node carrying nodeValue', [appleText.nodeName, appleText.nodeType, appleText.nodeValue], ['#text', TEXT_NODE, 'Apple']);
@@ -116,7 +117,7 @@ check('DOM-appended <li> appears in the nested view', roots(), expected());
 check('append matches oracle', roots(), oracleRoots(source));
 
 // 5. Edit text in place: Apple -> Green Apple.
-[...root.querySelectorAll('li')].find(li => li.textContent.startsWith('Apple')).childNodes[0].textContent = 'Green Apple';
+[...root.querySelectorAll('li')].find((li: any) => li.textContent.startsWith('Apple')).childNodes[0].textContent = 'Green Apple';
 obs.flush(); view.flush();
 check('in-place text edit flows through', roots(), expected());
 
@@ -128,19 +129,21 @@ check('removal matches oracle', roots(), oracleRoots(source));
 
 // 7. Insert at the FRONT of a list (insertBefore). With fractional-index ids this
 //    mints one key before the existing first child — monotonic counter ids would
-//    sort it last and break order. The view (ordered by id) must match the DOM.
+//    sort it last and break order. The view (ordered by order) must match the DOM.
 fruitUl.insertBefore(mk('li', 'Aardvark'), fruitUl.firstChild);
 obs.flush(); view.flush();
 check('mid-tree insertBefore keeps DOM order', roots(), expected());
-const firstFruitChild = view.data[0].childNodes[0].childNodes.find(c => c.nodeName === 'UL').childNodes[0];
+const firstFruitChild = view.data[0].childNodes[0].childNodes.find((c: any) => c.nodeName === 'UL').childNodes[0];
 check('inserted node sorts first among siblings', firstFruitChild.childNodes[0].nodeValue, 'Aardvark');
 
 // 8. `order` ascends within each sibling group (matches DOM order).
 const rowsNow = source.currentDOMRows();
-const byParent = new Map();
+const byParent = new Map<string, string[]>();
 for (const r of rowsNow) {
   const k = r.parentId ?? '∅';
-  (byParent.get(k) ?? byParent.set(k, []).get(k)).push(r.order);
+  let arr = byParent.get(k);
+  if (!arr) byParent.set(k, (arr = []));
+  arr.push(r.order);
 }
 const orderingOk = [...byParent.values()].every(os => S(os) === S([...os].sort()));
 check('order ascends within every sibling group', orderingOk, true);
@@ -148,11 +151,11 @@ check('order ascends within every sibling group', orderingOk, true);
 // 9. A MOVE preserves identity: id is stable, only parentId/order change, and
 //    descendants don't churn at all.
 const before = source.currentDOMRows();
-const bananaText0 = before.find(r => r.nodeValue === 'Banana'); // #text
+const bananaText0 = before.find(r => r.nodeValue === 'Banana')!; // #text
 const bananaTextId = bananaText0.id;
 const bananaLiId = bananaText0.parentId; // the enclosing <li>
-const bananaLiOldParent = before.find(r => r.id === bananaLiId).parentId;
-const bananaLi = [...root.querySelectorAll('li')].find(li => li.textContent.trim() === 'Banana');
+const bananaLiOldParent = before.find(r => r.id === bananaLiId)!.parentId;
+const bananaLi = [...root.querySelectorAll('li')].find((li: any) => li.textContent.trim() === 'Banana');
 root.querySelector('ul').appendChild(bananaLi); // reparent: inner list -> top-level <ul>
 obs.flush(); view.flush();
 

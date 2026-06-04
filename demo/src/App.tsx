@@ -1,18 +1,45 @@
 import {createSignal, onMount, onCleanup, For, Show} from 'solid-js';
+import type {JSX} from 'solid-js';
 import {QueryClient} from '@tanstack/query-core';
 import {createBuilder} from '@rocicorp/zero';
-import {DOMTreeSource, TEXT_NODE, COMMENT_NODE} from '../../src/dom-tree-source.js';
-import {createLabelSource} from '../../src/labels.js';
-import {taggedSchema, tagTable} from '../../src/tags.js';
-import {tanstackSource} from '../../src/tanstack-source.js';
-import {expandChildNodes, domDepth} from '../../src/tree-query.js';
-import {buildPipeline, ArrayView, MemoryStorage} from '../../src/zero-internals.js';
+import {DOMTreeSource, TEXT_NODE, COMMENT_NODE} from '../../src/dom-tree-source.ts';
+import {createLabelSource} from '../../src/labels.ts';
+import {taggedSchema} from '../../src/tags.ts';
+import {tanstackSource} from '../../src/tanstack-source.ts';
+import {expandChildNodes, domDepth} from '../../src/tree-query.ts';
+import {buildPipeline, ArrayView, MemoryStorage} from '../../src/zero-internals.ts';
+import type {Source, SourceChange, Row, BuilderDelegate} from '../../src/zero-internals.ts';
+import {ADD, REMOVE} from '../../src/change-type.ts';
+
+// --- view-model shapes (cloned from the materialized views for Solid) ------
+interface LabelChip {id: string; nodeId: string; text: string; color: string}
+interface TreeNode {
+  id: string;
+  nodeType: number;
+  nodeName: string;
+  nodeValue: string | null;
+  emoji: string | null;
+  labels: LabelChip[];
+  childNodes: TreeNode[];
+}
+interface LabelRow {
+  id: string;
+  nodeId: string;
+  text: string;
+  color: string;
+  node: {nodeName: string; nodeValue: string | null} | null;
+}
+interface Api {
+  addLabel(node: TreeNode): void;
+  removeLabel(chip: LabelChip): void;
+}
+type Sources = [Source, Source, Source];
 
 // Route each table in a query to its own source — three different kinds:
 //   node  -> the live DOM (DOMTreeSource)
 //   label -> in-memory, click-to-edit (MemorySource)
 //   tag   -> async/remote, via TanStack Query (tanstackSource)
-const makeDelegate = (nodeSource, labelSource, tagSource) => ({
+const makeDelegate = (nodeSource: Source, labelSource: Source, tagSource: Source): BuilderDelegate => ({
   getSource: n => (n === 'node' ? nodeSource : n === 'label' ? labelSource : n === 'tag' ? tagSource : undefined),
   createStorage: () => new MemoryStorage(),
   decorateInput: i => i,
@@ -21,7 +48,7 @@ const makeDelegate = (nodeSource, labelSource, tagSource) => ({
   addEdge: () => {},
 });
 
-const materialize = (query, delegate, id) => {
+const materialize = (query: any, delegate: BuilderDelegate, id: string): any => {
   const view = new ArrayView(buildPipeline(query.ast, delegate, id), query.format, true, () => {});
   view.flush();
   return view;
@@ -31,57 +58,57 @@ const materialize = (query, delegate, id) => {
 //   node.related('childNodes', …).related('labels', …).related('tag')
 // Zero has no recursive queries, so `childNodes` is unrolled `depth` levels
 // (expandChildNodes), sized to the live tree and rebuilt only when it grows.
-function buildTreeView(sources, depth) {
+function buildTreeView(sources: Sources, depth: number): any {
   const builder = createBuilder(taggedSchema);
   const query = expandChildNodes(
     builder.node.where('parentId', 'IS', null).orderBy('order', 'asc'),
     depth,
-    q => q.related('labels', l => l.orderBy('id', 'asc')).related('tag'),
+    (q: any) => q.related('labels', (l: any) => l.orderBy('id', 'asc')).related('tag'),
   );
   return materialize(query, makeDelegate(...sources), 'tree');
 }
 
 // View #2 — the label source itself, with the INVERSE relationship resolved:
 // label.related('node') (a `one()`) joins each label back to the node it tags.
-function buildLabelView(sources) {
+function buildLabelView(sources: Sources): any {
   const builder = createBuilder(taggedSchema);
   const query = builder.label.orderBy('id', 'asc').related('node');
   return materialize(query, makeDelegate(...sources), 'labels');
 }
 
-const clone = e => ({
+const clone = (e: any): TreeNode => ({
   id: e.id,
   nodeType: e.nodeType,
   nodeName: e.nodeName,
   nodeValue: e.nodeValue ?? null,
   emoji: e.tag?.emoji ?? null, // joined from the remote (TanStack) tag source
-  labels: (e.labels ?? []).map(l => ({id: l.id, nodeId: l.nodeId, text: l.text, color: l.color})),
+  labels: (e.labels ?? []).map((l: any) => ({id: l.id, nodeId: l.nodeId, text: l.text, color: l.color})),
   childNodes: (e.childNodes ?? []).map(clone),
 });
 
-// A fake remote "tags" API: maps nodeName -> emoji. Each refetch returns the next
-// set, simulating the server changing — every matching node updates live.
-const EMOJI_SETS = [
-  {UL: '📋', LI: '•', '#text': '🔤'},
-  {UL: '📁', LI: '✅', '#text': '✍️'},
-  {UL: '🗂️', LI: '⭐', '#text': '💬'},
-];
-let serverIndex = 0;
-const fetchTags = () =>
-  new Promise(resolve =>
-    setTimeout(() => {
-      const set = EMOJI_SETS[serverIndex % EMOJI_SETS.length];
-      resolve(Object.entries(set).map(([nodeName, emoji]) => ({nodeName, emoji})));
-    }, 450), // simulated network latency
-  );
-
-const cloneLabel = l => ({
+const cloneLabel = (l: any): LabelRow => ({
   id: l.id,
   nodeId: l.nodeId,
   text: l.text,
   color: l.color,
   node: l.node ? {nodeName: l.node.nodeName, nodeValue: l.node.nodeValue ?? null} : null,
 });
+
+// A fake remote "tags" API: maps nodeName -> emoji. Each refetch returns the next
+// set, simulating the server changing — every matching node updates live.
+const EMOJI_SETS: Record<string, string>[] = [
+  {UL: '📋', LI: '•', '#text': '🔤'},
+  {UL: '📁', LI: '✅', '#text': '✍️'},
+  {UL: '🗂️', LI: '⭐', '#text': '💬'},
+];
+let serverIndex = 0;
+const fetchTags = (): Promise<readonly Row[]> =>
+  new Promise(resolve =>
+    setTimeout(() => {
+      const set = EMOJI_SETS[serverIndex % EMOJI_SETS.length]!;
+      resolve(Object.entries(set).map(([nodeName, emoji]) => ({nodeName, emoji})));
+    }, 450), // simulated network latency
+  );
 
 const PALETTE = [
   {text: '★', color: '#f5b14c'},
@@ -100,7 +127,11 @@ const SEED = `<ul>
   </li>
 </ul>`;
 
-function NodeView(props) {
+// Module-level handlers wired up in onMount (single App instance).
+let doReset = (): void => {};
+let doRefetch = (): void => {};
+
+function NodeView(props: {node: TreeNode; api: Api}): JSX.Element {
   const n = () => props.node;
   const kind = () =>
     n().nodeType === TEXT_NODE ? 'text' : n().nodeType === COMMENT_NODE ? 'comment' : 'element';
@@ -127,7 +158,7 @@ function NodeView(props) {
           )}
         </For>
       </span>
-      <Show when={(n().childNodes ?? []).length > 0}>
+      <Show when={n().childNodes.length > 0}>
         <ul class="children">
           <For each={n().childNodes}>{c => <NodeView node={c} api={props.api} />}</For>
         </ul>
@@ -136,16 +167,16 @@ function NodeView(props) {
   );
 }
 
-export default function App() {
-  const [tree, setTree] = createSignal([]);
-  const [labels, setLabels] = createSignal([]);
+export default function App(): JSX.Element {
+  const [tree, setTree] = createSignal<TreeNode[]>([]);
+  const [labels, setLabels] = createSignal<LabelRow[]>([]);
   const [count, setCount] = createSignal(0);
   const [labelCount, setLabelCount] = createSignal(0);
   const [depth, setDepth] = createSignal(0);
   const [tagFetching, setTagFetching] = createSignal(false);
   const [tagCount, setTagCount] = createSignal(0);
-  const [api, setApi] = createSignal({addLabel() {}, removeLabel() {}});
-  let editorRef;
+  const [api, setApi] = createSignal<Api>({addLabel() {}, removeLabel() {}});
+  let editorRef!: HTMLDivElement;
 
   onMount(() => {
     editorRef.innerHTML = SEED;
@@ -162,15 +193,16 @@ export default function App() {
       queryKey: ['tags'],
       queryFn: fetchTags,
     });
-    const sources = [nodeSource, labelSource, tagSource];
+    const sources: Sources = [nodeSource, labelSource, tagSource];
 
     // The label source's own view never changes shape, so it's built once.
     const labelView = buildLabelView(sources);
 
     // Self-sizing depth: Zero can't recurse, so we unroll childNodes exactly as
     // deep as the live tree and rebuild only when it grows deeper (rare).
-    let view, builtDepth = 0;
-    const ensureDepth = need => {
+    let view: any;
+    let builtDepth = 0;
+    const ensureDepth = (need: number): boolean => {
       if (view && need <= builtDepth) return false;
       builtDepth = Math.max(need, builtDepth, 2);
       view?.destroy?.();
@@ -180,53 +212,53 @@ export default function App() {
     };
     ensureDepth(domDepth(editorRef));
 
-    const refresh = () => {
-      const data = (view.data ?? []).map(clone);
+    const refresh = (): void => {
+      const data: TreeNode[] = (view.data ?? []).map(clone);
       setTree(data);
-      let nodes = 0, count = 0;
-      const walk = ns => ns.forEach(n => { nodes++; count += n.labels.length; walk(n.childNodes); });
+      let nodes = 0;
+      let c = 0;
+      const walk = (ns: TreeNode[]): void => ns.forEach(n => { nodes++; c += n.labels.length; walk(n.childNodes); });
       walk(data);
       setCount(nodes);
-      setLabelCount(count);
+      setLabelCount(c);
       setLabels((labelView.data ?? []).map(cloneLabel));
     };
 
-    const pushLabel = change => {
+    const pushLabel = (change: SourceChange): void => {
       for (const _ of labelSource.push(change)) { /* drain */ }
       view.flush();      // tree view shows labels as chips
       labelView.flush(); // label-source table
       refresh();
     };
-    const added = new Map(); // id -> row, so we can remove cleanly
+    const added = new Map<string, Row>(); // id -> row, so we can remove cleanly
     let nextLabel = 0;
     setApi({
       addLabel(node) {
-        const have = new Set((node.labels ?? []).map(l => l.text));
+        const have = new Set(node.labels.map(l => l.text));
         const choice = PALETTE.find(p => !have.has(p.text));
         if (!choice) return; // node already has every palette label
-        const row = {id: 'l' + ++nextLabel, nodeId: node.id, text: choice.text, color: choice.color};
-        added.set(row.id, row);
-        pushLabel([0, row, null]);
+        const row: Row = {id: 'l' + ++nextLabel, nodeId: node.id, text: choice.text, color: choice.color};
+        added.set(row.id as string, row);
+        pushLabel([ADD, row, null]);
       },
       removeLabel(label) {
-        const row = added.get(label.id) ?? label;
+        const row = added.get(label.id) ?? (label as unknown as Row);
         added.delete(label.id);
-        pushLabel([1, row, null]);
+        pushLabel([REMOVE, row, null]);
       },
     });
 
     // When the remote tag query resolves / refetches, its source pushes deltas;
     // commit them to the tree view and re-render (emojis appear/update).
     tagSource.onSync(() => { view.flush(); refresh(); });
-    const updateTagStatus = () => {
+    const updateTagStatus = (): void => {
       const r = tagSource.observer.getCurrentResult();
       setTagFetching(r.isFetching);
       setTagCount((r.data ?? []).length);
     };
     tagSource.observer.subscribe(updateTagStatus);
     updateTagStatus();
-    // Refetch with the next emoji set — simulates the server changing.
-    App._refetchTags = () => { serverIndex++; tagSource.observer.refetch(); };
+    doRefetch = () => { serverIndex++; void tagSource.observer.refetch(); };
 
     refresh();
 
@@ -241,15 +273,15 @@ export default function App() {
     mo.observe(editorRef, {childList: true, subtree: true, characterData: true});
     onCleanup(() => { mo.disconnect(); tagSource.destroy(); });
 
-    // expose reset that also clears labels
-    App._reset = () => {
-      for (const row of [...added.values()]) for (const _ of labelSource.push([1, row, null])) { /* drain */ }
+    // reset also clears labels
+    doReset = () => {
+      for (const row of [...added.values()]) for (const _ of labelSource.push([REMOVE, row, null])) { /* drain */ }
       added.clear();
       editorRef.innerHTML = SEED;
     };
   });
 
-  const addNode = () => {
+  const addNode = (): void => {
     const ul = editorRef.querySelector('ul ul') ?? editorRef.querySelector('ul') ?? editorRef;
     const li = document.createElement('li');
     li.textContent = 'New ' + Math.floor(Math.random() * 1000);
@@ -276,7 +308,7 @@ export default function App() {
             <h2>Live DOM tree</h2>
             <div class="actions">
               <button onClick={addNode}>+ add &lt;li&gt;</button>
-              <button onClick={() => App._reset?.()}>reset</button>
+              <button onClick={() => doReset()}>reset</button>
             </div>
           </div>
           <p class="hint">Type — it's <code>contenteditable</code>. Add items, edit text, delete lines.</p>
@@ -292,7 +324,7 @@ export default function App() {
           <div class="tag-bar">
             <span>🛰️ remote <code>tag</code> source (TanStack Query):</span>
             <span class="tag-status">{tagFetching() ? 'fetching…' : `${tagCount()} rows`}</span>
-            <button onClick={() => App._refetchTags?.()} disabled={tagFetching()}>
+            <button onClick={() => doRefetch()} disabled={tagFetching()}>
               refetch (server changes the emojis)
             </button>
           </div>
@@ -328,8 +360,8 @@ export default function App() {
                   <td><code>{l.nodeId}</code></td>
                   <td>
                     <Show when={l.node} fallback={<span class="empty">—</span>}>
-                      <span class="badge">{l.node.nodeName}</span>
-                      <Show when={l.node.nodeValue}><span class="value"> “{l.node.nodeValue}”</span></Show>
+                      <span class="badge">{l.node!.nodeName}</span>
+                      <Show when={l.node!.nodeValue}><span class="value"> “{l.node!.nodeValue}”</span></Show>
                     </Show>
                   </td>
                 </tr>

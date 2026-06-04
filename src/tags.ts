@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// tags.js — a THIRD source for the demo, fetched via TanStack Query.
+// tags.ts — a THIRD source for the demo, fetched via TanStack Query.
 //
 // `tag` rows ({nodeName, emoji}) come from a (fake) remote API through a TanStack
 // query. The relationship `node.tag` (one, node.nodeName == tag.nodeName) joins an
@@ -12,8 +12,8 @@
 // ---------------------------------------------------------------------------
 
 import {createSchema, table, string, relationships} from '@rocicorp/zero';
-import {nodeTable} from './dom-tree-source.js';
-import {labelTable} from './labels.js';
+import {nodeTable} from './dom-tree-source.ts';
+import {labelTable} from './labels.ts';
 
 export const tagTable = table('tag')
   .columns({

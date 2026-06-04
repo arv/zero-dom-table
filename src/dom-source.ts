@@ -8,8 +8,8 @@
 // `data-v` are coerced via the schema, so an existing HTML table IS a source.
 //
 // Architecture: `connect`, `push`, `genPush` and all the overlay / split-edit /
-// comparator machinery are reused verbatim from Zero's MemorySource (imported
-// through ./zero-internals.js). Only the *storage layer* differs:
+// comparator machinery are reused verbatim from Zero's MemorySource. Only the
+// *storage layer* differs:
 //   - `#fetch`        reads rows out of the DOM and sorts them on demand
 //   - `#writeChange`  mutates the DOM (<tr> insert / remove)
 //   - `#has`          checks row presence by primary key in the DOM
@@ -17,7 +17,6 @@
 // ---------------------------------------------------------------------------
 
 import {
-  // reused verbatim from Zero:
   genPushAndWriteWithSplitEdit,
   generateWithOverlay,
   generateWithStart,
@@ -31,55 +30,83 @@ import {
   transformFilters,
   createPredicate,
   assertOrderingIncludesPK,
-} from './zero-internals.js';
+} from './zero-internals.ts';
+import {ADD, REMOVE, EDIT} from './change-type.ts';
+import type {
+  Source,
+  SourceInput,
+  SourceChange,
+  Input,
+  Output,
+  FetchRequest,
+  Node as IVMNode,
+  Constraint,
+  Connection,
+  Overlay,
+  SourceSchema,
+  TableSchema,
+  Ordering,
+  Condition,
+  Row,
+  Value,
+  SchemaValue,
+} from './zero-internals.ts';
 
-export class DOMSource {
-  #container;
-  #doc;
-  #tableName;
-  #columns;
-  #columnOrder;
-  #primaryKey;
-  #primaryIndexSort;
-  #pkComparator;
+type Dir = 'asc' | 'desc';
+type Sort = (readonly [string, Dir])[];
+// Bound comparators compare rows OR partial seek-keys carrying min/max sentinels.
+type BoundComparator = (a: Record<string, unknown>, b: Record<string, unknown>) => number;
 
-  #connections = [];
-  #overlay;
+export interface DOMSourceSchema {
+  tableName: string;
+  columns: Record<string, SchemaValue>;
+  primaryKey: readonly string[];
+}
+
+export class DOMSource implements Source {
+  readonly #container: Element;
+  readonly #doc: Document;
+  readonly #tableName: string;
+  readonly #columns: Record<string, SchemaValue>;
+  readonly #columnOrder: string[];
+  readonly #primaryKey: readonly string[];
+  readonly #primaryIndexSort: Sort;
+  readonly #pkComparator: BoundComparator;
+
+  readonly #connections: Connection[] = [];
+  #overlay: Overlay | undefined;
   #pushEpoch = 0;
 
-  /**
-   * @param {Element} container element that holds the row <tr>s (e.g. a <tbody>)
-   * @param {{tableName: string, columns: Record<string, {type: string}>, primaryKey: readonly string[]}} schema
-   */
-  constructor(container, {tableName, columns, primaryKey}) {
+  constructor(container: Element, schema: DOMSourceSchema) {
+    const {tableName, columns, primaryKey} = schema;
     this.#container = container;
     this.#doc = container.ownerDocument;
     this.#tableName = tableName;
     this.#columns = columns;
     this.#columnOrder = Object.keys(columns);
     this.#primaryKey = primaryKey;
-    this.#primaryIndexSort = primaryKey.map(k => [k, 'asc']);
+    this.#primaryIndexSort = primaryKey.map(k => [k, 'asc'] as const);
     this.#pkComparator = makeBoundComparator(this.#primaryIndexSort);
   }
 
-  get container() {
+  get container(): Element {
     return this.#container;
   }
 
-  get tableSchema() {
+  get tableSchema(): TableSchema {
     return {
       name: this.#tableName,
       columns: this.#columns,
-      primaryKey: this.#primaryKey,
+      primaryKey: this.#primaryKey as TableSchema['primaryKey'],
     };
   }
 
-  get primaryKey() {
+  get primaryKey(): readonly string[] {
     return this.#primaryKey;
   }
 
   /** Current committed rows, parsed from the DOM (in document order). */
-  currentRows() {
+  currentRows(): Row[] {
     return this.#readAllRows();
   }
 
@@ -88,14 +115,14 @@ export class DOMSource {
    * MutationObserver bridge to revert to a known snapshot before replaying a
    * diff through push(). Does NOT notify connected outputs.
    */
-  reset(rows) {
+  reset(rows: readonly Row[]): void {
     while (this.#container.firstChild) this.#container.firstChild.remove();
     for (const row of rows) this.#domAdd(row);
   }
 
   // -- row <-> <tr> serialization ------------------------------------------
 
-  #rowToTr(row) {
+  #rowToTr(row: Row): HTMLTableRowElement {
     const tr = this.#doc.createElement('tr');
     for (const col of this.#columnOrder) {
       const v = normalize(row[col]);
@@ -108,39 +135,40 @@ export class DOMSource {
     return tr;
   }
 
-  #trToRow(tr) {
-    const row = {};
-    const cells = [...tr.children].filter(c => c.tagName === 'TD');
+  #trToRow(tr: Element): Row {
+    const row: Record<string, Value> = {};
+    const cells = [...tr.children].filter((c): c is HTMLElement => c.tagName === 'TD');
     cells.forEach((td, i) => {
       const col = td.dataset.col ?? this.#columnOrder[i];
       if (col == null) return;
       const type = this.#columns[col]?.type ?? 'string';
+      const text = td.textContent ?? '';
       if (td.dataset.v !== undefined) {
-        const parsed = JSON.parse(td.dataset.v);
+        const parsed = JSON.parse(td.dataset.v) as Value;
         const rendered = parsed === null ? '' : String(parsed);
         // If the visible text still matches data-v, trust the typed value.
         // If it diverges, a user edited the text in place — honor the edit.
-        row[col] = td.textContent === rendered ? parsed : coerce(td.textContent, type);
+        row[col] = text === rendered ? parsed : coerce(text, type);
       } else {
         // Hand-authored cell: coerce text via the schema.
-        row[col] = coerce(td.textContent, type);
+        row[col] = coerce(text, type);
       }
     });
     for (const col of this.#columnOrder) if (!(col in row)) row[col] = null;
     return row;
   }
 
-  #rowTrs() {
+  #rowTrs(): Element[] {
     return [...this.#container.children].filter(c => c.tagName === 'TR');
   }
 
-  #readAllRows() {
+  #readAllRows(): Row[] {
     return this.#rowTrs().map(tr => this.#trToRow(tr));
   }
 
   // -- DOM-backed storage operations ---------------------------------------
 
-  #findTr(row) {
+  #findTr(row: Row): Element | undefined {
     for (const tr of this.#rowTrs()) {
       const r = this.#trToRow(tr);
       let match = true;
@@ -152,11 +180,11 @@ export class DOMSource {
     return undefined;
   }
 
-  #has(row) {
+  #has(row: Row): boolean {
     return this.#findTr(row) !== undefined;
   }
 
-  #domAdd(row) {
+  #domAdd(row: Row): void {
     const tr = this.#rowToTr(row);
     // Insert in primary-key order to keep the visible table tidy.
     for (const existing of this.#rowTrs()) {
@@ -168,35 +196,35 @@ export class DOMSource {
     this.#container.appendChild(tr);
   }
 
-  #domRemove(row) {
+  #domRemove(row: Row): void {
     const tr = this.#findTr(row);
     if (tr) tr.remove();
   }
 
-  #writeChange(change) {
+  #writeChange(change: SourceChange): void {
     switch (change[0]) {
-      case 0: // ADD
+      case ADD:
         this.#domAdd(change[1]);
         break;
-      case 1: // REMOVE
+      case REMOVE:
         this.#domRemove(change[1]);
         break;
-      case 2: // EDIT: remove old, add new
+      case EDIT: // remove old, add new
         this.#domRemove(change[2]);
         this.#domAdd(change[1]);
         break;
       default:
-        throw new Error(`unknown change type ${change[0]}`);
+        throw new Error(`unknown change type ${(change as SourceChange)[0]}`);
     }
   }
 
   // -- Source interface -----------------------------------------------------
 
-  #getSchema(connection, unordered) {
+  #getSchema(connection: Connection, unordered: boolean): SourceSchema {
     return {
       tableName: this.#tableName,
       columns: this.#columns,
-      primaryKey: this.#primaryKey,
+      primaryKey: this.#primaryKey as SourceSchema['primaryKey'],
       sort: unordered ? undefined : connection.sort,
       system: 'client',
       relationships: {},
@@ -205,20 +233,20 @@ export class DOMSource {
     };
   }
 
-  connect(sort, filters, splitEditKeys) {
+  connect(sort: Ordering | undefined, filters?: Condition, splitEditKeys?: Set<string>): SourceInput {
     const transformedFilters = transformFilters(filters);
     const unordered = sort === undefined;
-    const internalSort = sort ?? this.#primaryIndexSort;
+    const internalSort = sort ?? (this.#primaryIndexSort as unknown as Ordering);
 
-    const input = {
+    const input: SourceInput = {
       getSchema: () => schema,
-      fetch: req => this.#fetch(req, connection),
-      setOutput: output => { connection.output = output; },
+      fetch: (req: FetchRequest) => this.#fetch(req, connection),
+      setOutput: (output: Output) => { connection.output = output; },
       destroy: () => { this.#disconnect(input); },
       fullyAppliedFilters: !transformedFilters.conditionsRemoved,
     };
 
-    const connection = {
+    const connection: Connection = {
       input,
       output: undefined,
       sort: internalSort,
@@ -234,12 +262,12 @@ export class DOMSource {
     };
 
     const schema = this.#getSchema(connection, unordered);
-    if (!unordered) assertOrderingIncludesPK(internalSort, this.#primaryKey);
+    if (!unordered) assertOrderingIncludesPK(internalSort, this.#primaryKey as TableSchema['primaryKey']);
     this.#connections.push(connection);
     return input;
   }
 
-  #disconnect(input) {
+  #disconnect(input: Input): void {
     const idx = this.#connections.findIndex(c => c.input === input);
     if (idx === -1) throw new Error('Connection not found');
     this.#connections.splice(idx, 1);
@@ -250,47 +278,48 @@ export class DOMSource {
    * MemorySource keeps a persistent BTree per ordering; we re-derive from the
    * DOM (the source of truth) each fetch — simpler and always consistent.
    */
-  #deriveIndex(indexSort) {
+  #deriveIndex(indexSort: Sort): {data: SortedRows; comparator: BoundComparator} {
     const comparator = makeBoundComparator(indexSort);
     const rows = this.#readAllRows();
-    rows.sort(comparator);
+    rows.sort(comparator as (a: Row, b: Row) => number);
     return {data: new SortedRows(rows, comparator), comparator};
   }
 
   // A faithful port of MemorySource#fetch — only #deriveIndex differs.
-  *#fetch(req, conn) {
-    const requestedSort = must(conn.sort);
+  *#fetch(req: FetchRequest, conn: Connection): Generator<IVMNode | 'yield'> {
+    const requestedSort = must(conn.sort) as unknown as Sort;
     const {compareRows} = conn;
     const connectionComparator = req.reverse
-      ? (r1, r2) => compareRows(r2, r1)
+      ? (r1: Row, r2: Row) => compareRows(r2, r1)
       : compareRows;
     const pkConstraint = primaryKeyConstraintFromFilters(
       conn.filters?.condition,
-      this.#primaryKey,
+      this.#primaryKey as TableSchema['primaryKey'],
     );
     const fetchOrPkConstraint = pkConstraint ?? req.constraint;
-    const indexSort = [];
+    const indexSort: Sort = [];
     if (fetchOrPkConstraint) {
       for (const key of Object.keys(fetchOrPkConstraint)) indexSort.push([key, 'asc']);
     }
     if (
       this.#primaryKey.length > 1 ||
       !fetchOrPkConstraint ||
-      !constraintMatchesPrimaryKey(fetchOrPkConstraint, this.#primaryKey)
+      !constraintMatchesPrimaryKey(fetchOrPkConstraint, this.#primaryKey as TableSchema['primaryKey'])
     ) {
       indexSort.push(...requestedSort);
     }
     const {data, comparator: compare} = this.#deriveIndex(indexSort);
-    const indexComparator = req.reverse ? (r1, r2) => compare(r2, r1) : compare;
+    const indexComparator: BoundComparator = req.reverse ? (r1, r2) => compare(r2, r1) : compare;
     const startAt = req.start?.row;
-    let scanStart;
+    let scanStart: Record<string, unknown> | Row | undefined;
     if (fetchOrPkConstraint) {
-      scanStart = {};
+      const ss: Record<string, unknown> = {};
       for (const [key, dir] of indexSort) {
-        if (hasOwn(fetchOrPkConstraint, key)) scanStart[key] = fetchOrPkConstraint[key];
-        else if (req.reverse) scanStart[key] = dir === 'asc' ? maxValue : minValue;
-        else scanStart[key] = dir === 'asc' ? minValue : maxValue;
+        if (hasOwn(fetchOrPkConstraint, key)) ss[key] = (fetchOrPkConstraint as Record<string, unknown>)[key];
+        else if (req.reverse) ss[key] = dir === 'asc' ? maxValue : minValue;
+        else ss[key] = dir === 'asc' ? minValue : maxValue;
       }
+      scanStart = ss;
     } else {
       scanStart = startAt;
     }
@@ -318,14 +347,14 @@ export class DOMSource {
       : withConstraint;
   }
 
-  *push(change) {
+  *push(change: SourceChange): Generator<'yield'> {
     for (const result of this.genPush(change)) if (result === 'yield') yield result;
   }
 
-  *genPush(change) {
-    const exists = row => this.#has(row);
-    const setOverlay = o => { this.#overlay = o; };
-    const writeChange = c => this.#writeChange(c);
+  *genPush(change: SourceChange): Generator<'yield' | undefined> {
+    const exists = (row: Row) => this.#has(row);
+    const setOverlay = (o: Overlay | undefined): Overlay | undefined => (this.#overlay = o);
+    const writeChange = (c: SourceChange) => this.#writeChange(c);
     yield* genPushAndWriteWithSplitEdit(
       this.#connections,
       change,
@@ -339,34 +368,34 @@ export class DOMSource {
 
 // --- small local utilities (inlined to keep the brittle-import surface small) ---
 
-function must(v, msg) {
+function must<T>(v: T | undefined | null, msg?: string): T {
   if (v === undefined || v === null) throw new Error(msg ?? `must: got ${v}`);
   return v;
 }
 
-const hasOwn = (o, k) => Object.hasOwn(o, k);
+const hasOwn = (o: object, k: PropertyKey): boolean => Object.hasOwn(o, k);
 
-function normalize(v) {
+function normalize(v: Value): Value {
   return v === undefined ? null : v;
 }
 
-function coerce(text, type) {
+function coerce(text: string, type: string): Value {
   switch (type) {
     case 'number': return text === '' ? null : Number(text);
     case 'boolean': return text === 'true';
-    case 'json': return JSON.parse(text);
+    case 'json': return JSON.parse(text) as Value;
     case 'null': return null;
     default: return text;
   }
 }
 
 // Caching wrapper so an iterable can be (re)consumed; mirrors shared/once.
-function once(iterable) {
-  let cache = null;
+function once<T>(iterable: Iterable<T>): Iterable<T> {
+  let cache: T[] | null = null;
   return {
     *[Symbol.iterator]() {
       if (cache) { yield* cache; return; }
-      const c = [];
+      const c: T[] = [];
       for (const v of iterable) { c.push(v); yield v; }
       cache = c;
     },
@@ -378,80 +407,89 @@ function once(iterable) {
 const minValue = Symbol('min-value');
 const maxValue = Symbol('max-value');
 
-function compareBounds(a, b) {
+function compareBounds(a: unknown, b: unknown): number {
   if (a === b) return 0;
   if (typeof a === 'symbol') return a === minValue ? -1 : 1;
   if (typeof b === 'symbol') return b === minValue ? 1 : -1;
-  return compareValues(a, b);
+  return compareValues(a as Value, b as Value);
 }
 
-function makeBoundComparator(sort) {
+function makeBoundComparator(sort: Sort): BoundComparator {
   const len = sort.length;
-  const k0 = sort[0][0];
-  const a0 = sort[0][1] === 'asc';
-  const k1 = len > 1 ? sort[1][0] : '';
-  const a1 = len > 1 ? sort[1][1] === 'asc' : true;
+  const k0 = sort[0]![0];
+  const a0 = sort[0]![1] === 'asc';
+  const k1 = len > 1 ? sort[1]![0] : '';
+  const a1 = len > 1 ? sort[1]![1] === 'asc' : true;
   return (a, b) => {
     const c0 = a0 ? compareBounds(a[k0], b[k0]) : compareBounds(b[k0], a[k0]);
     if (len === 1 || c0 !== 0) return c0;
     const c1 = a1 ? compareBounds(a[k1], b[k1]) : compareBounds(b[k1], a[k1]);
     if (len === 2 || c1 !== 0) return c1;
     for (let i = 2; i < len; i++) {
-      const cmp = compareBounds(a[sort[i][0]], b[sort[i][0]]);
-      if (cmp !== 0) return sort[i][1] === 'asc' ? cmp : -cmp;
+      const cmp = compareBounds(a[sort[i]![0]], b[sort[i]![0]]);
+      if (cmp !== 0) return sort[i]![1] === 'asc' ? cmp : -cmp;
     }
     return 0;
   };
 }
 
-function* generateRows(data, scanStart, reverse) {
-  yield* data[reverse ? 'valuesFromReversed' : 'valuesFrom'](scanStart);
+function* generateRows(
+  data: SortedRows,
+  scanStart: Record<string, unknown> | Row | undefined,
+  reverse: boolean | undefined,
+): Generator<Row> {
+  yield* reverse ? data.valuesFromReversed(scanStart) : data.valuesFrom(scanStart);
 }
 
-function* generateWithConstraint(it, constraint) {
+function* generateWithConstraint(
+  it: Iterable<IVMNode | 'yield'>,
+  constraint: Constraint | undefined,
+): Generator<IVMNode | 'yield'> {
   for (const node of it) {
-    if (constraint && !constraintMatchesRow(constraint, node.row)) break;
+    if (node !== 'yield' && constraint && !constraintMatchesRow(constraint, node.row)) break;
     yield node;
   }
 }
 
-function* generateWithFilter(it, filter) {
-  for (const node of it) if (filter(node.row)) yield node;
+function* generateWithFilter(
+  it: Iterable<IVMNode | 'yield'>,
+  filter: (row: Row) => boolean,
+): Generator<IVMNode | 'yield'> {
+  for (const node of it) if (node === 'yield' || filter(node.row)) yield node;
 }
 
 // A sorted array exposing the BTreeSet seek surface that generateRows needs.
 class SortedRows {
-  #rows;
-  #cmp;
-  constructor(rows, cmp) {
+  readonly #rows: Row[];
+  readonly #cmp: BoundComparator;
+  constructor(rows: Row[], cmp: BoundComparator) {
     this.#rows = rows;
     this.#cmp = cmp;
   }
-  #lowerBound(key) {
+  #lowerBound(key: Record<string, unknown>): number {
     let lo = 0, hi = this.#rows.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.#cmp(this.#rows[mid], key) < 0) lo = mid + 1;
+      if (this.#cmp(this.#rows[mid]!, key) < 0) lo = mid + 1;
       else hi = mid;
     }
     return lo;
   }
-  #upperBound(key) {
+  #upperBound(key: Record<string, unknown>): number {
     let lo = 0, hi = this.#rows.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (this.#cmp(this.#rows[mid], key) <= 0) lo = mid + 1;
+      if (this.#cmp(this.#rows[mid]!, key) <= 0) lo = mid + 1;
       else hi = mid;
     }
     return lo;
   }
-  *valuesFrom(scanStart) {
+  *valuesFrom(scanStart: Record<string, unknown> | Row | undefined): Generator<Row> {
     const start = scanStart === undefined ? 0 : this.#lowerBound(scanStart);
-    for (let i = start; i < this.#rows.length; i++) yield this.#rows[i];
+    for (let i = start; i < this.#rows.length; i++) yield this.#rows[i]!;
   }
-  *valuesFromReversed(scanStart) {
-    const start =
-      scanStart === undefined ? this.#rows.length - 1 : this.#upperBound(scanStart) - 1;
-    for (let i = start; i >= 0; i--) yield this.#rows[i];
+  *valuesFromReversed(scanStart: Record<string, unknown> | Row | undefined): Generator<Row> {
+    const start = scanStart === undefined ? this.#rows.length - 1 : this.#upperBound(scanStart) - 1;
+    for (let i = start; i >= 0; i--) yield this.#rows[i]!;
   }
 }

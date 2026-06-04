@@ -5,12 +5,13 @@
 
 import {QueryClient} from '@tanstack/query-core';
 import {createSchema, table, string, number, relationships, createBuilder} from '@rocicorp/zero';
-import {tanstackSource} from '../src/tanstack-source.js';
-import {buildPipeline, ArrayView, MemoryStorage} from '../src/zero-internals.js';
+import {tanstackSource} from '../src/tanstack-source.ts';
+import {buildPipeline, ArrayView, MemoryStorage} from '../src/zero-internals.ts';
+import type {BuilderDelegate, Row} from '../src/zero-internals.ts';
 
-const S = v => JSON.stringify(v);
+const S = (v: unknown): string => JSON.stringify(v);
 let failures = 0;
-const check = (label, actual, expected) => {
+const check = (label: string, actual: unknown, expected: unknown): void => {
   const a = S(actual), e = S(expected);
   if (a !== e) { failures++; console.error(`  ✗ ${label}\n      expected: ${e}\n      actual:   ${a}`); }
   else console.log(`  ✓ ${label}`);
@@ -34,10 +35,10 @@ let teamsData = [
   {id: 10, name: 'Platform'},
   {id: 20, name: 'Growth'},
 ];
-const fetchUsers = () => Promise.resolve(usersData.map(u => ({...u})));
-const fetchTeams = () => Promise.resolve(teamsData.map(t => ({...t})));
+const fetchUsers = (): Promise<readonly Row[]> => Promise.resolve(usersData.map(u => ({...u})));
+const fetchTeams = (): Promise<readonly Row[]> => Promise.resolve(teamsData.map(t => ({...t})));
 
-const main = async () => {
+const main = async (): Promise<void> => {
   const queryClient = new QueryClient({
     defaultOptions: {queries: {staleTime: Infinity, retry: false}},
   });
@@ -48,19 +49,20 @@ const main = async () => {
   const userSource = tanstackSource(schema.tables.user, queryClient, {queryKey: ['users'], queryFn: fetchUsers});
   const teamSource = tanstackSource(schema.tables.team, queryClient, {queryKey: ['teams'], queryFn: fetchTeams});
 
-  const delegate = {
+  const delegate: BuilderDelegate = {
     getSource: n => (n === 'user' ? userSource : n === 'team' ? teamSource : undefined),
     createStorage: () => new MemoryStorage(),
     decorateInput: i => i, decorateFilterInput: i => i, decorateSourceInput: i => i, addEdge: () => {},
   };
 
   const builder = createBuilder(schema);
-  const query = builder.user.orderBy('id', 'asc').related('team');
+  // `.ast`/`.format` are internal to the query builder (not on the public Query type).
+  const query = builder.user.orderBy('id', 'asc').related('team') as any;
   const input = buildPipeline(query.ast, delegate, 'tq');
   const view = new ArrayView(input, query.format, true, () => {});
   view.flush();
 
-  const usersView = () => view.data.map(u => ({name: u.name, team: u.team?.name ?? null}));
+  const usersView = () => (view.data as any[]).map(u => ({name: u.name, team: u.team?.name ?? null}));
 
   // 1. Two TanStack queries joined by a Zero relationship.
   check('join across two TanStack sources', usersView(), [
@@ -98,10 +100,10 @@ const main = async () => {
   ]);
 
   // 4. A plain ZQL filter/sort over the TanStack collection.
-  const q2 = builder.user.where('teamId', '=', 20).orderBy('name', 'asc');
+  const q2 = builder.user.where('teamId', '=', 20).orderBy('name', 'asc') as any;
   const v2 = new ArrayView(buildPipeline(q2.ast, delegate, 'tq2'), q2.format, true, () => {});
   v2.flush();
-  check('where/orderBy over a TanStack collection', v2.data.map(u => u.name), ['Ada', 'Lin']);
+  check('where/orderBy over a TanStack collection', (v2.data as any[]).map(u => u.name), ['Ada', 'Lin']);
 
   console.log(failures === 0
     ? '\n✅ TanStack Query works as a Zero Source (joins + refetch + filter)'

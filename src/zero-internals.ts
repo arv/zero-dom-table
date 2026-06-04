@@ -11,17 +11,14 @@
 // path* to a file inside node_modules is resolved as a plain file — bypassing
 // the map. Crucially this works the same in Node AND in Vite/the browser (Vite
 // also only applies `exports` to bare specifiers), and resolves to the same
-// physical files the public entry uses, so there's no module duplication.
+// physical files the public entry uses, so there's no module duplication. The
+// adjacent `.d.ts` files also give us real types for everything below.
 //
 // Pinned to @rocicorp/zero@1.5.0 — brittle against version bumps. If you upgrade
 // Zero, re-check these paths and the signatures they export.
 // ---------------------------------------------------------------------------
 
-const IVM = '../node_modules/@rocicorp/zero/out/zql/src/ivm';
-const BUILDER = '../node_modules/@rocicorp/zero/out/zql/src/builder';
-const QUERY = '../node_modules/@rocicorp/zero/out/zql/src/query';
-
-// Reused verbatim from Zero — the subtle, correctness-critical bits.
+// --- runtime values (reused verbatim from Zero) ---------------------------
 export {
   MemorySource,
   genPushAndWriteWithSplitEdit,
@@ -48,6 +45,11 @@ export {
   makeEditChange,
   makeRemoveChange,
 } from '../node_modules/@rocicorp/zero/out/zql/src/ivm/change.js';
+export {
+  makeSourceChangeAdd,
+  makeSourceChangeRemove,
+  makeSourceChangeEdit,
+} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/source.js';
 
 export {
   createPredicate,
@@ -60,3 +62,38 @@ export {assertOrderingIncludesPK} from '../node_modules/@rocicorp/zero/out/zql/s
 export {buildPipeline} from '../node_modules/@rocicorp/zero/out/zql/src/builder/builder.js';
 export {ArrayView} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/array-view.js';
 export {MemoryStorage} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/memory-storage.js';
+export type {BuilderDelegate} from '../node_modules/@rocicorp/zero/out/zql/src/builder/builder.js';
+
+// --- types (from the adjacent .d.ts of the same internal modules) ---------
+export type {
+  Source,
+  SourceInput,
+  SourceChange,
+} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/source.js';
+
+export type {
+  Input,
+  InputBase,
+  Output,
+  FetchRequest,
+  Start,
+  Storage,
+} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/operator.js';
+
+export type {Node, Comparator} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/data.js';
+export type {Change} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/change.js';
+export type {
+  Connection,
+  Overlay,
+} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/memory-source.js';
+export type {Condition} from '../node_modules/@rocicorp/zero/out/zero-protocol/src/ast.js';
+export type {Constraint} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/constraint.js';
+export type {SourceSchema} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/schema.js';
+export type {Stream} from '../node_modules/@rocicorp/zero/out/zql/src/ivm/stream.js';
+
+// --- public types (re-exported for convenience) ---------------------------
+export type {Row, Value} from '../node_modules/@rocicorp/zero/out/zero-protocol/src/data.js';
+export type {Ordering} from '../node_modules/@rocicorp/zero/out/zero-protocol/src/ast.js';
+export type {PrimaryKey} from '../node_modules/@rocicorp/zero/out/zero-protocol/src/primary-key.js';
+export type {SchemaValue} from '../node_modules/@rocicorp/zero/out/zero-types/src/schema-value.js';
+export type {TableSchema} from '../node_modules/@rocicorp/zero/out/zero-types/src/schema.js';

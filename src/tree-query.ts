@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// tree-query.js — expanding the self-referential `childNodes` relationship.
+// tree-query.ts — expanding the self-referential `childNodes` relationship.
 //
 // IMPORTANT: Zero (ZQL) has NO recursive queries — no recursive-CTE equivalent.
 // `buildPipeline` eagerly unrolls `ast.related` into Join operators, so a query
@@ -10,25 +10,32 @@
 //
 // So instead of a magic constant that silently truncates, `domDepth()` measures
 // the live tree and callers expand exactly that deep (rebuilding when it grows).
-// The alternative idiom — query the flat node list and rebuild the tree in the
-// view layer from parentId — has no depth limit at all; this module keeps the
-// "the query returns the nested tree" shape, sized to the data.
 // ---------------------------------------------------------------------------
+
+// The Zero query builder's relationship API is keyed by relationship-name
+// strings and changes the result type per `.related` call, which a generic
+// recursive unroll helper can't express precisely. We keep the caller's query
+// type `Q` (so `.ast`/`.format` stay typed) and use `any` for the dynamic
+// recursion internally.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyQuery = any;
 
 /**
  * Expand `childNodes` `depth` levels, ordering each level by `order` and
  * optionally applying `perLevel` (e.g. to pull in a `labels` relationship) at
  * every level.
- *
- * @param {object} query a Zero query positioned at the tree roots
- * @param {number} depth number of `childNodes` levels to unroll
- * @param {(q: object) => object} [perLevel] applied at each level
  */
-export function expandChildNodes(query, depth, perLevel = q => q) {
-  const go = (q, d) =>
-    d <= 0
-      ? perLevel(q)
-      : perLevel(q).related('childNodes', sub => go(sub.orderBy('order', 'asc'), d - 1));
+export function expandChildNodes<Q>(
+  query: Q,
+  depth: number,
+  perLevel: (q: Q) => Q = q => q,
+): Q {
+  const go = (q: AnyQuery, d: number): AnyQuery => {
+    const withLevel: AnyQuery = perLevel(q);
+    return d <= 0
+      ? withLevel
+      : withLevel.related('childNodes', (sub: AnyQuery) => go(sub.orderBy('order', 'asc'), d - 1));
+  };
   return go(query, depth);
 }
 
@@ -38,9 +45,9 @@ export function expandChildNodes(query, depth, perLevel = q => q) {
  * Expanding `childNodes` this many levels is always enough to reach every node
  * (one level of headroom — the deepest expansion just yields empty children).
  */
-export function domDepth(root) {
+export function domDepth(root: Node): number {
   let max = 0;
-  const walk = (node, d) => {
+  const walk = (node: Node, d: number): void => {
     for (const child of node.childNodes) {
       if (d > max) max = d;
       walk(child, d + 1);

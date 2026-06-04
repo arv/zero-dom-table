@@ -16,42 +16,71 @@
 // Net visible effect within one microtask: the user's change, now also pushed.
 // ---------------------------------------------------------------------------
 
-const OBSERVE_OPTS = {
+import {
+  makeSourceChangeAdd,
+  makeSourceChangeRemove,
+  makeSourceChangeEdit,
+} from './zero-internals.ts';
+import type {Row, SourceChange} from './zero-internals.ts';
+import {REMOVE, EDIT} from './change-type.ts';
+
+/** The slice of a DOM-backed source that observeDOM drives. */
+export interface ObservableSource {
+  readonly container: Element;
+  readonly primaryKey: readonly string[];
+  currentRows(): Row[];
+  reset(rows: Row[]): void;
+  push(change: SourceChange): Iterable<unknown>;
+}
+
+export interface ObserveOptions {
+  onChange?: (change: SourceChange) => void;
+  ObserverImpl?: typeof MutationObserver;
+}
+
+export interface ObserveHandle {
+  /** Force a synchronous reconcile (handy in tests / before reading results). */
+  flush(): void;
+  disconnect(): void;
+}
+
+const OBSERVE_OPTS: MutationObserverInit = {
   childList: true,
   subtree: true,
   characterData: true,
   attributes: true,
 };
 
-export function observeDOM(source, {onChange, ObserverImpl} = {}) {
+export function observeDOM(source: ObservableSource, options: ObserveOptions = {}): ObserveHandle {
+  const {onChange, ObserverImpl} = options;
   const container = source.container;
   const pk = source.primaryKey;
   const MO =
     ObserverImpl ??
-    container.ownerDocument?.defaultView?.MutationObserver ??
+    (container.ownerDocument?.defaultView as (Window & typeof globalThis) | null)?.MutationObserver ??
     globalThis.MutationObserver;
   if (!MO) throw new Error('No MutationObserver available in this environment');
 
-  const keyOf = row => pk.map(k => JSON.stringify(row[k])).join('\x00');
-  const snap = new Map(); // pk -> row (last committed state)
+  const keyOf = (row: Row) => pk.map(k => JSON.stringify(row[k])).join('\x00');
+  const snap = new Map<string, Row>(); // pk -> row (last committed state)
   for (const row of source.currentRows()) snap.set(keyOf(row), row);
 
-  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const same = (a: Row, b: Row) => JSON.stringify(a) === JSON.stringify(b);
 
-  const reconcile = () => {
+  const reconcile = (): void => {
     const current = source.currentRows();
-    const currentByKey = new Map(current.map(r => [keyOf(r), r]));
+    const currentByKey = new Map<string, Row>(current.map(r => [keyOf(r), r]));
 
-    const changes = [];
+    const changes: SourceChange[] = [];
     // removed / edited
     for (const [k, oldRow] of snap) {
       const newRow = currentByKey.get(k);
-      if (newRow === undefined) changes.push([1, oldRow, null]);
-      else if (!same(oldRow, newRow)) changes.push([2, newRow, oldRow]);
+      if (newRow === undefined) changes.push(makeSourceChangeRemove(oldRow));
+      else if (!same(oldRow, newRow)) changes.push(makeSourceChangeEdit(newRow, oldRow));
     }
     // added
     for (const [k, newRow] of currentByKey) {
-      if (!snap.has(k)) changes.push([0, newRow, null]);
+      if (!snap.has(k)) changes.push(makeSourceChangeAdd(newRow));
     }
     if (changes.length === 0) return;
 
@@ -59,9 +88,9 @@ export function observeDOM(source, {onChange, ObserverImpl} = {}) {
     source.reset([...snap.values()]);
     for (const change of changes) {
       for (const _ of source.push(change)) { /* drain */ }
-      if (change[0] === 1) snap.delete(keyOf(change[1]));
+      if (change[0] === REMOVE) snap.delete(keyOf(change[1]));
       else snap.set(keyOf(change[1]), change[1]); // add & edit key on new row
-      if (change[0] === 2) {
+      if (change[0] === EDIT) {
         // pk may have changed on an edit; drop the stale key.
         const oldKey = keyOf(change[2]);
         if (oldKey !== keyOf(change[1])) snap.delete(oldKey);
@@ -81,7 +110,6 @@ export function observeDOM(source, {onChange, ObserverImpl} = {}) {
   observer.observe(container, OBSERVE_OPTS);
 
   return {
-    /** Force a synchronous reconcile (handy in tests / before reading results). */
     flush() {
       observer.disconnect();
       try {

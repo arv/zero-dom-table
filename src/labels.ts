@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// labels.js — a SECOND source, joined to the DOM tree.
+// labels.ts — a SECOND source, joined to the DOM tree.
 //
 // Demonstrates combining sources: the `node` table is backed by the live DOM
 // (DOMTreeSource), while `label` is an ordinary in-memory source. They're tied
@@ -11,8 +11,8 @@
 // ---------------------------------------------------------------------------
 
 import {createSchema, table, string, relationships} from '@rocicorp/zero';
-import {nodeTable} from './dom-tree-source.js';
-import {MemorySource} from './zero-internals.js';
+import {nodeTable} from './dom-tree-source.ts';
+import {MemorySource} from './zero-internals.ts';
 
 export const labelTable = table('label')
   .columns({
@@ -39,7 +39,7 @@ export const labeledSchema = createSchema({
   relationships: [nodeRelationships, labelRelationships],
 });
 
-export function createLabelSource() {
+export function createLabelSource(): MemorySource {
   const t = labeledSchema.tables.label;
   return new MemorySource('label', t.columns, t.primaryKey);
 }

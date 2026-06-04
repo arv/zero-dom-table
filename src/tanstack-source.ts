@@ -12,22 +12,32 @@
 // ---------------------------------------------------------------------------
 
 import {QueryObserver} from '@tanstack/query-core';
-import {collectionSource} from './collection-source.js';
+import type {QueryClient, QueryObserverOptions} from '@tanstack/query-core';
+import {collectionSource} from './collection-source.ts';
+import type {SourceTable, CollectionSource} from './collection-source.ts';
+import type {Row} from './zero-internals.ts';
+
+type RowObserverOptions = QueryObserverOptions<readonly Row[], Error, readonly Row[]>;
+type RowObserver = QueryObserver<readonly Row[], Error, readonly Row[]>;
+
+export interface TanstackSource extends CollectionSource {
+  /** The underlying QueryObserver — read status (isFetching) or trigger refetch. */
+  observer: RowObserver;
+}
 
 /**
- * @param {{name: string, columns: object, primaryKey: readonly string[]}} table
- * @param {import('@tanstack/query-core').QueryClient} queryClient
- * @param {object} options QueryObserver options ({ queryKey, queryFn, select, ... })
- *   The query is expected to resolve to an array of rows matching `table`.
+ * The query is expected to resolve to an array of rows matching `table`.
  */
-export function tanstackSource(table, queryClient, options) {
+export function tanstackSource(
+  table: SourceTable,
+  queryClient: QueryClient,
+  options: RowObserverOptions,
+): TanstackSource {
   const observer = new QueryObserver(queryClient, options);
   const source = collectionSource(table, {
     getRows: () => observer.getCurrentResult().data ?? [],
     subscribe: onChange => observer.subscribe(() => onChange()),
-  });
-  // Expose the observer so callers can read status (isFetching, dataUpdatedAt)
-  // and trigger refetch.
+  }) as TanstackSource;
   source.observer = observer;
   return source;
 }

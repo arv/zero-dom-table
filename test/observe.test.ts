@@ -2,15 +2,15 @@
 // via the MutationObserver bridge. Starts from a hand-authored HTML table.
 
 import {Window} from 'happy-dom';
-import {DOMSource} from '../src/dom-source.js';
-import {observeDOM} from '../src/observe-dom.js';
+import {DOMSource} from '../src/dom-source.ts';
+import {observeDOM} from '../src/observe-dom.ts';
+import type {Output, Node as IVMNode} from '../src/zero-internals.ts';
 
-const window = new Window();
-const document = window.document;
-const S = v => JSON.stringify(v);
+const document: any = new Window().document;
+const S = (v: unknown): string => JSON.stringify(v);
 
 let failures = 0;
-const check = (label, actual, expected) => {
+const check = (label: string, actual: unknown, expected: unknown): void => {
   const a = S(actual), e = S(expected);
   if (a !== e) { failures++; console.error(`  ✗ ${label}\n      expected: ${e}\n      actual:   ${a}`); }
   else console.log(`  ✓ ${label}`);
@@ -28,28 +28,32 @@ const columns = {
   name: {type: 'string'},
   score: {type: 'number'},
   active: {type: 'boolean'},
-};
+} as const;
 const source = new DOMSource(tbody, {tableName: 'item', columns, primaryKey: ['id']});
 
 // A live query: id-ascending, plus a running aggregate driven by pushed changes.
 const input = source.connect([['id', 'asc']]);
 let activeCount = 0;
-const log = [];
-input.setOutput({
+const log: string[] = [];
+const output: Output = {
   push(change) {
-    const [type, node] = change;
+    const c = change as any;
+    const type = c[0];
+    const node = c[1];
     log.push(type === 0 ? 'add' : type === 1 ? 'remove' : 'edit');
     if (type === 0 && node.row.active) activeCount++;
     if (type === 1 && node.row.active) activeCount--;
     if (type === 2) {
-      const old = change[2].row;
+      const old = c[2].row;
       activeCount += (node.row.active ? 1 : 0) - (old.active ? 1 : 0);
     }
     return [];
   },
-});
+};
+input.setOutput(output);
 
-const fetchAll = () => [...input.fetch({})].filter(n => n !== 'yield').map(n => n.row);
+const fetchAll = () =>
+  [...input.fetch({})].filter((n): n is IVMNode => n !== 'yield').map(n => n.row);
 
 // Seed activeCount from initial adoption (bob active, alice not).
 for (const r of source.currentRows()) if (r.active) activeCount++;
@@ -70,12 +74,11 @@ tbody.appendChild(tr);
 
 // (b) Edit a cell in place: flip alice's active false -> true.
 const aliceActiveCell = [...tbody.children]
-  .map(tr => tr)
-  .find(tr => tr.children[0].textContent === '1').children[3];
+  .find((row: any) => row.children[0].textContent === '1').children[3];
 aliceActiveCell.textContent = 'true';
 
 // (c) Remove bob entirely.
-[...tbody.children].find(tr => tr.children[0].textContent === '2').remove();
+[...tbody.children].find((row: any) => row.children[0].textContent === '2').remove();
 
 bridge.flush(); // deterministic reconcile (observer would fire on a microtask)
 
@@ -83,17 +86,13 @@ check('query reflects DOM-driven add + edit + remove', fetchAll(), [
   {id: 1, name: 'alice', score: 5, active: true},
   {id: 3, name: 'carol', score: 20, active: true},
 ]);
-check('pushed change kinds reached the pipeline', log, [
-  'remove', // bob
-  'edit',   // alice
-  'add',    // carol
-]);
+check('pushed change kinds reached the pipeline', log, ['remove', 'edit', 'add']);
 // started at 1 (bob). remove bob(-1)=0, alice edit(+1)=1, add carol(+1)=2.
 check('live aggregate updated via pushes', activeCount, 2);
 
 // 3. A second edit on an already-canonical row (now carries data-v) must still
 //    be picked up when edited via text content.
-[...tbody.children].find(tr => tr.children[0].textContent === '3').children[2].textContent = '99';
+[...tbody.children].find((row: any) => row.children[0].textContent === '3').children[2].textContent = '99';
 bridge.flush();
 check('text edit on canonical cell flows through', fetchAll(), [
   {id: 1, name: 'alice', score: 5, active: true},
