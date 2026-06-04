@@ -68,7 +68,9 @@ Zero's exact logic and swaps only:
 
 - **`#fetch`** — reads rows out of the DOM and sorts them on demand (instead of
   reading a persistent BTree index). A faithful port of `MemorySource#fetch`.
-- **`#writeChange`** — mutates the DOM (`<tr>` insert / remove) instead of a BTree.
+- **`#writeChange`** — mutates the DOM instead of a BTree (`<tr>` insert / remove; a
+  same-pk **edit updates the existing `<tr>` in place**, touching only changed cells, so
+  the node, untouched cells, and any cursor survive — only a pk change does remove + add).
 - **`#has`** — checks row presence by primary key in the DOM.
 
 The DOM is the single source of truth; no secondary indexes are persisted.

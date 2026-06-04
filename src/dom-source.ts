@@ -201,6 +201,33 @@ export class DOMSource implements Source {
     if (tr) tr.remove();
   }
 
+  // Update an existing <tr>'s cells in place, touching only the ones that
+  // actually changed (preserves the node, untouched cells, and any cursor).
+  #updateTr(tr: Element, row: Row): void {
+    const cells = [...tr.children].filter((c): c is HTMLElement => c.tagName === 'TD');
+    cells.forEach((td, i) => {
+      const col = td.dataset.col ?? this.#columnOrder[i];
+      if (col == null) return;
+      const v = normalize(row[col]);
+      const encoded = JSON.stringify(v);
+      if (td.dataset.v === encoded) return; // unchanged cell — leave it alone
+      td.dataset.v = encoded;
+      td.textContent = v === null ? '' : String(v);
+    });
+  }
+
+  // A same-pk edit is the *same row* → mutate it in place (keeps it pk-sorted
+  // since the key didn't move). A pk change is a real identity change → remove
+  // the old row and re-insert the new one in order.
+  #domEdit(oldRow: Row, newRow: Row): void {
+    if (this.#primaryKey.every((k: string) => valuesEqual(oldRow[k], newRow[k]))) {
+      const tr = this.#findTr(oldRow);
+      if (tr) { this.#updateTr(tr, newRow); return; }
+    }
+    this.#domRemove(oldRow);
+    this.#domAdd(newRow);
+  }
+
   #writeChange(change: SourceChange): void {
     switch (change[0]) {
       case ADD:
@@ -209,9 +236,8 @@ export class DOMSource implements Source {
       case REMOVE:
         this.#domRemove(change[1]);
         break;
-      case EDIT: // remove old, add new
-        this.#domRemove(change[2]);
-        this.#domAdd(change[1]);
+      case EDIT: // update in place when the pk is unchanged
+        this.#domEdit(change[2], change[1]);
         break;
       default:
         throw new Error(`unknown change type ${(change as SourceChange)[0]}`);

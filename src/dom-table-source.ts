@@ -74,14 +74,38 @@ export function domTableSource(tbody: Element, table: SourceTable): CollectionSo
     return row;
   };
 
+  const samePk = (a: Row, b: Row): boolean => pk.every((k: string) => valuesEqual(a[k], b[k]));
   const rowTrs = (): Element[] => [...tbody.children].filter(c => c.tagName === 'TR');
   const findTr = (row: Row): Element | undefined =>
-    rowTrs().find(tr => {
-      const r = trToRow(tr);
-      return pk.every((k: string) => valuesEqual(r[k], row[k]));
-    });
+    rowTrs().find(tr => samePk(trToRow(tr), row));
   const domRemove = (row: Row): void => { findTr(row)?.remove(); };
   const domAdd = (row: Row): void => { tbody.appendChild(rowToTr(row)); };
+
+  // Update an existing <tr>'s cells in place, touching only the ones that
+  // actually changed (preserves the node, untouched cells, and any cursor).
+  const updateTr = (tr: Element, row: Row): void => {
+    const cells = [...tr.children].filter((c): c is HTMLElement => c.tagName === 'TD');
+    cells.forEach((td, i) => {
+      const col = td.dataset.col ?? cols[i];
+      if (col == null) return;
+      const v = normalize(row[col]);
+      const encoded = JSON.stringify(v);
+      if (td.dataset.v === encoded) return; // unchanged cell — leave it alone
+      td.dataset.v = encoded;
+      td.textContent = v === null ? '' : String(v);
+    });
+  };
+
+  // A same-pk edit is the *same row* → mutate it in place. A pk change is a
+  // genuine identity change → remove the old row and add the new one.
+  const domEdit = (oldRow: Row, newRow: Row): void => {
+    if (samePk(oldRow, newRow)) {
+      const tr = findTr(oldRow);
+      if (tr) { updateTr(tr, newRow); return; }
+    }
+    domRemove(oldRow);
+    domAdd(newRow);
+  };
 
   return collectionSource(table, {
     getRows: () => rowTrs().map(trToRow),
@@ -97,7 +121,7 @@ export function domTableSource(tbody: Element, table: SourceTable): CollectionSo
       switch (change[0]) {
         case ADD: domAdd(change[1]); break;
         case REMOVE: domRemove(change[1]); break;
-        default: domRemove(change[2]); domAdd(change[1]); break; // EDIT
+        default: domEdit(change[2], change[1]); break; // EDIT
       }
     },
   });

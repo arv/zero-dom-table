@@ -50,10 +50,15 @@ tbody.appendChild(tr);
 check('a DOM-appended <tr> is one inbound change', src.sync(), 1);
 check('query sees both rows', queryRows(), [{id: 1, name: 'a'}, {id: 2, name: 'b'}]);
 
-// 4. OUTBOUND edit: API edit updates the DOM cell and the query.
+// 4. OUTBOUND edit: a same-pk edit updates the existing <tr> IN PLACE.
+const trBefore: any = [...tbody.children].find((tr: any) => tr.children[0].dataset.v === '1');
+const idCellBefore = trBefore.children[0];
 drain(src.push([EDIT, {id: 1, name: 'A'}, {id: 1, name: 'a'}]));
+const trAfter: any = [...tbody.children].find((tr: any) => tr.children[0].dataset.v === '1');
 check('edit reflected in the query', queryRows(), [{id: 1, name: 'A'}, {id: 2, name: 'b'}]);
 check('edit reflected in the DOM cell', domCell('1', 1), 'A');
+check('edit mutates the SAME <tr> node (in place, not remove+add)', trAfter === trBefore, true);
+check('the unchanged id cell node is left untouched', trAfter.children[0] === idCellBefore, true);
 check('no echo after edit', src.sync(), 0);
 
 // 5. OUTBOUND remove: API remove drops the <tr>.
