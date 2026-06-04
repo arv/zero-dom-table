@@ -47,7 +47,7 @@ The Zero internals are imported by relative path (`src/zero-internals.ts`); thei
 declarations). `ChangeType` is a const-enum with no runtime module, so we mirror its tags
 in [src/change-type.ts](src/change-type.ts).
 
-Seven suites, all green:
+Eight suites, all green:
 
 | Suite | What it proves |
 | --- | --- |
@@ -58,6 +58,7 @@ Seven suites, all green:
 | `test/join.test.ts` | **Combining sources**: a single query joins the DOM-backed `node` source with a separate in-memory `label` source via `node.related('labels')`. Labels appear on the right nodes, update as the label source changes, and stay attached across DOM edits (the join is by stable node `id`). |
 | `test/tanstack.test.ts` | **TanStack Query as a source**: two independent TanStack queries (`users`, `teams`) joined via `user.related('team')`. The join is live as either query refetches (rename a team → every joined user updates; add/move a user → flows through), and plain `where`/`orderBy` works over a fetched collection. |
 | `test/bidirectional.test.ts` | **Bidirectional `collectionSource`** (`writeChange` hook): a flat DOM table where `source.push(...)` inserts/edits/removes a `<tr>` *and* raw DOM edits flow into the query — round-trip, with the outbound write **not** echoing back (a `sync` right after a push is a no-op). |
+| `test/host.test.ts` | **`createHost` / `registerSource`**: two async sources registered by name, joined via a relationship; `materialize` returns `[rows, meta]`, and `meta.type` flips **`unknown → complete`** when the fetches land (a collection's loading state surfaced as Zero's `{type}`). |
 
 ## How it works
 
@@ -178,6 +179,52 @@ and “loading”
 lives in TanStack (`isFetching`), since IVM has no loading state — an unresolved query just
 looks like an empty source. What you get is ZQL **joins, relationships, sorting, and derived
 incremental views** over data you fetched yourself.
+
+## Toward a real custom-source API (the seams)
+
+Everything above reaches Zero's internals by relative-path import (see “The hack” below).
+This sketches what Zero could expose so custom sources are first-class — three layered
+seams, each with running code + tests behind it.
+
+### 1. `createSource(table, store)` — the storage backend
+
+`MemorySource`'s connect/push/genPush/overlay/split-edit/index machinery is **generic**;
+only storage differs. [src/create-source.ts](src/create-source.ts) factors that out, so you
+implement a tiny `RowStore` and Zero keeps the volatile IVM protocol sealed:
+
+```ts
+interface RowStore {
+  has(row): boolean; insert(row): void; delete(row): void;
+  update?(oldRow, newRow): void;   // optional in-place edit
+  rows(): Iterable<Row>;           // Zero maintains the sorted indexes
+}
+createSource(table, store): Source
+```
+
+`DOMSource` is now literally `createSource(table, new DomRowStore(<tbody>))` — and the
+differential test (`DOMSource ≡ MemorySource`) re-validates `createSource` through it. This is
+the SQLite-vtable move: publish the *backend* (durable), keep the *planner* (volatile) inside.
+
+### 2. `collectionSource(table, {getRows, subscribe, writeChange, status})` — observable collections
+
+For async/observable stores (TanStack, signals, sockets), the observe-diff-push adapter
+([src/collection-source.ts](src/collection-source.ts)). `writeChange` makes it bidirectional;
+**`status`** reports the collection's load state.
+
+### 3. `createHost(schema)` + `registerSource` — the client integration
+
+A query that joins sources needs every table its AST touches to resolve via the delegate's
+`getSource`. `registerSource(name, …)` is the write side of that map; `materialize(query)`
+returns `[rows, meta]` like Zero's `useQuery`, with **`meta` aggregated across the query's
+sources** — so a still-loading source makes the query `{type: 'unknown'}` (an unresolved
+async source ≡ a not-yet-synced Zero query). See [src/host.ts](src/host.ts);
+`wrapDelegate(original, registry)` there is the minimal primitive (front the delegate, fall
+back) — the smallest thing Zero could expose to let custom sources work with the real
+`useQuery` for the pure-custom case.
+
+> In Zero proper, these would import the IVM directly (no hack), `ChangeType` would have a
+> runtime export, and `registerSource` would also mark the table **client-local** (un-synced)
+> and route mutators to `writeChange`. This repo is the reference behind that proposal.
 
 ### The hack
 

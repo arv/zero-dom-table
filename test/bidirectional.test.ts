@@ -25,8 +25,9 @@ const src = domTableSource(tbody, {name: 'item', columns, primaryKey: ['id']});
 const input = src.connect([['id', 'asc']]);
 const queryRows = () => [...input.fetch({})].filter((n): n is IVMNode => n !== 'yield').map(n => n.row);
 const trCount = () => [...tbody.children].filter((c: any) => c.tagName === 'TR').length;
+// cells render their value as text (the typed value lives in a WeakMap on the source)
 const domCell = (id: string, col: number) =>
-  [...tbody.children].find((tr: any) => tr.children[0].dataset.v === id)?.children[col].textContent;
+  [...tbody.children].find((tr: any) => tr.children[0].textContent === id)?.children[col].textContent;
 
 // 1. OUTBOUND: an API push mutates the DOM and the query.
 drain(src.push([ADD, {id: 1, name: 'a'}, null]));
@@ -40,21 +41,21 @@ check('still exactly one <tr>', trCount(), 1);
 
 // 3. INBOUND: a raw DOM edit flows into the query via sync.
 const tr = document.createElement('tr');
-const mkTd = (col: string, v: unknown) => {
+const mkTd = (v: unknown) => { // a hand-authored cell: just text, source coerces by schema
   const td = document.createElement('td');
-  td.dataset.col = col; td.dataset.v = JSON.stringify(v); td.textContent = String(v);
+  td.textContent = String(v);
   return td;
 };
-tr.append(mkTd('id', 2), mkTd('name', 'b'));
+tr.append(mkTd(2), mkTd('b'));
 tbody.appendChild(tr);
 check('a DOM-appended <tr> is one inbound change', src.sync(), 1);
 check('query sees both rows', queryRows(), [{id: 1, name: 'a'}, {id: 2, name: 'b'}]);
 
 // 4. OUTBOUND edit: a same-pk edit updates the existing <tr> IN PLACE.
-const trBefore: any = [...tbody.children].find((tr: any) => tr.children[0].dataset.v === '1');
+const trBefore: any = [...tbody.children].find((tr: any) => tr.children[0].textContent === '1');
 const idCellBefore = trBefore.children[0];
 drain(src.push([EDIT, {id: 1, name: 'A'}, {id: 1, name: 'a'}]));
-const trAfter: any = [...tbody.children].find((tr: any) => tr.children[0].dataset.v === '1');
+const trAfter: any = [...tbody.children].find((tr: any) => tr.children[0].textContent === '1');
 check('edit reflected in the query', queryRows(), [{id: 1, name: 'A'}, {id: 2, name: 'b'}]);
 check('edit reflected in the DOM cell', domCell('1', 1), 'A');
 check('edit mutates the SAME <tr> node (in place, not remove+add)', trAfter === trBefore, true);

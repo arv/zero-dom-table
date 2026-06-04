@@ -37,6 +37,10 @@ export function tanstackSource(
   const source = collectionSource(table, {
     getRows: () => observer.getCurrentResult().data ?? [],
     subscribe: onChange => observer.subscribe(() => onChange()),
+    status: () => {
+      const r = observer.getCurrentResult();
+      return {loading: r.isPending, error: r.error ?? undefined};
+    },
   }) as TanstackSource;
   source.observer = observer;
   return source;

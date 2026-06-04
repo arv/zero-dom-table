@@ -4,7 +4,7 @@
   "description": "Experimental Rocicorp Zero IVM Sources backed by the DOM — a flat table and a DOM tree with childNodes/parentNode relationships, cross-source joins, and a Vite + Solid demo.",
   "type": "module",
   "scripts": {
-    "test": "node test/differential.test.ts && node test/observe.test.ts && node test/pipeline.test.ts && node test/tree.test.ts && node test/join.test.ts && node test/tanstack.test.ts && node test/bidirectional.test.ts",
+    "test": "node test/differential.test.ts && node test/observe.test.ts && node test/pipeline.test.ts && node test/tree.test.ts && node test/join.test.ts && node test/tanstack.test.ts && node test/bidirectional.test.ts && node test/host.test.ts",
     "dev": "vite serve demo",
     "build": "vite build demo",
     "typecheck": "tsgo --noEmit"

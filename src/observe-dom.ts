@@ -31,6 +31,7 @@ export interface ObservableSource {
   currentRows(): Row[];
   reset(rows: Row[]): void;
   push(change: SourceChange): Iterable<unknown>;
+  compare(a: Row, b: Row): number;
 }
 
 export interface ObserveOptions {
@@ -65,7 +66,7 @@ export function observeDOM(source: ObservableSource, options: ObserveOptions = {
   const snap = new Map<string, Row>(); // pk -> row (last committed state)
   for (const row of source.currentRows()) snap.set(keyOf(row), row);
 
-  const same = (a: Row, b: Row) => JSON.stringify(a) === JSON.stringify(b);
+  const same = (a: Row, b: Row) => source.compare(a, b) === 0;
 
   const reconcile = (): void => {
     const current = source.currentRows();

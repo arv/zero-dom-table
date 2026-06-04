@@ -24,9 +24,15 @@ import {
   makeSourceChangeAdd,
   makeSourceChangeRemove,
   makeSourceChangeEdit,
-} from './zero-internals.ts';
-import type {Source, SourceChange, Row, SchemaValue, PrimaryKey} from './zero-internals.ts';
-import {ADD, REMOVE, EDIT} from './change-type.ts';
+} from "./zero-internals.ts";
+import type {
+  Source,
+  SourceChange,
+  Row,
+  SchemaValue,
+  PrimaryKey,
+} from "./zero-internals.ts";
+import { ADD, REMOVE, EDIT } from "./change-type.ts";
 
 export interface SourceTable {
   readonly name: string;
@@ -34,10 +40,20 @@ export interface SourceTable {
   readonly primaryKey: PrimaryKey;
 }
 
+/** A collection's load state — bridged into a query's `meta` (Zero's `{type}`). */
+export interface SourceStatus {
+  loading: boolean;
+  error?: unknown;
+}
+
 export interface CollectionSource extends Source {
   /** Force a reconcile (tests; or after an out-of-band change). */
   sync(): number;
-  onSync(cb: (changeCount: number) => void): () => void;
+  onSync(cb: () => void): () => void;
+  /** Current load state (loading/error). Defaults to {loading: false}. */
+  status(): SourceStatus;
+  /** Fires whenever the underlying collection emits (data OR status change). */
+  onStatusChange(cb: () => void): () => void;
   destroy(): void;
 }
 
@@ -55,22 +71,34 @@ export interface CollectionOptions {
    * no-op (no double-apply).
    */
   writeChange?: (change: SourceChange) => void;
+  /** Report the collection's load state (e.g. TanStack's isPending/error). */
+  status?: () => SourceStatus;
 }
 
-export function collectionSource(table: SourceTable, opts: CollectionOptions): CollectionSource {
-  const {getRows, subscribe, key, writeChange} = opts;
+export function collectionSource(
+  table: SourceTable,
+  opts: CollectionOptions,
+): CollectionSource {
+  const { getRows, subscribe, key, writeChange, status } = opts;
   const inner = new MemorySource(table.name, table.columns, table.primaryKey);
   const pk = table.primaryKey;
-  const keyOf = key ?? ((row: Row) => pk.map((k: string) => JSON.stringify(row[k])).join('\x00'));
+  const keyOf =
+    key ??
+    ((row: Row) => pk.map((k: string) => JSON.stringify(row[k])).join("\x00"));
   const committed = new Map<string, Row>(); // the diff baseline = what inner holds
-  const listeners = new Set<(n: number) => void>();
+  const listeners = new Set<() => void>();
+  const statusListeners = new Set<() => void>();
   const S = JSON.stringify;
 
   // Advance the committed baseline to reflect a change that was applied to inner.
   const applyToCommitted = (change: SourceChange): void => {
     switch (change[0]) {
-      case REMOVE: committed.delete(keyOf(change[1])); break;
-      case ADD: committed.set(keyOf(change[1]), change[1]); break;
+      case REMOVE:
+        committed.delete(keyOf(change[1]));
+        break;
+      case ADD:
+        committed.set(keyOf(change[1]), change[1]);
+        break;
       case EDIT: {
         const oldKey = keyOf(change[2]);
         const newKey = keyOf(change[1]);
@@ -91,7 +119,8 @@ export function collectionSource(table: SourceTable, opts: CollectionOptions): C
     const changes: SourceChange[] = [];
     for (const [k, old] of committed) {
       const now = curByKey.get(k);
-      if (now === undefined) changes.push(makeSourceChangeRemove(old)); // remove
+      if (now === undefined)
+        changes.push(makeSourceChangeRemove(old)); // remove
       else if (S(old) !== S(now)) changes.push(makeSourceChangeEdit(now, old)); // edit
     }
     for (const [k, now] of curByKey) {
@@ -101,40 +130,64 @@ export function collectionSource(table: SourceTable, opts: CollectionOptions): C
     changes.sort((a, b) => (a[0] === ADD ? 1 : 0) - (b[0] === ADD ? 1 : 0));
 
     for (const change of changes) {
-      for (const _ of inner.push(change)) { /* drain */ }
+      for (const _ of inner.push(change)) {
+        /* drain */
+      }
       applyToCommitted(change);
     }
-    if (changes.length) for (const l of listeners) l(changes.length);
+    if (changes.length) for (const l of listeners) l();
     return changes.length;
   };
 
   // Outbound edge: Zero push -> inner (+ committed) (+ collection via writeChange).
   // Order matters: advance `committed` BEFORE writeChange, so the observer's
   // echoed sync sees no diff (whether it fires sync- or asynchronously).
-  function* push(change: SourceChange): Generator<'yield'> {
+  function* push(change: SourceChange): Generator<"yield"> {
     yield* inner.push(change);
     applyToCommitted(change);
     writeChange?.(change);
   }
-  function* genPush(change: SourceChange): Generator<'yield' | undefined> {
+  function* genPush(change: SourceChange): Generator<"yield" | undefined> {
     yield* inner.genPush(change);
     applyToCommitted(change);
     writeChange?.(change);
   }
 
-  const unsubscribe = subscribe ? subscribe(sync) : () => {};
+  // Every external event drives a data reconcile AND a status re-check (a
+  // loading→loaded transition changes status without changing rows).
+  const onExternal = () => {
+    sync();
+    for (const l of statusListeners) l();
+  };
+  const unsubscribe = subscribe ? subscribe(onExternal) : () => {};
   sync(); // capture whatever is available now
 
   return {
     // --- Source interface ---
-    get tableSchema() { return inner.tableSchema; },
+    get tableSchema() {
+      return inner.tableSchema;
+    },
     connect: inner.connect.bind(inner),
     push,
     genPush,
 
     // --- lifecycle ---
     sync,
-    onSync(cb) { listeners.add(cb); return () => listeners.delete(cb); },
-    destroy() { unsubscribe(); listeners.clear(); },
+    onSync(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    status() {
+      return status ? status() : { loading: false };
+    },
+    onStatusChange(cb) {
+      statusListeners.add(cb);
+      return () => statusListeners.delete(cb);
+    },
+    destroy() {
+      unsubscribe();
+      listeners.clear();
+      statusListeners.clear();
+    },
   };
 }
