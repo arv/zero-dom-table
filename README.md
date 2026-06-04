@@ -47,7 +47,7 @@ The Zero internals are imported by relative path (`src/zero-internals.ts`); thei
 declarations). `ChangeType` is a const-enum with no runtime module, so we mirror its tags
 in [src/change-type.ts](src/change-type.ts).
 
-Six suites, all green:
+Seven suites, all green:
 
 | Suite | What it proves |
 | --- | --- |
@@ -57,6 +57,7 @@ Six suites, all green:
 | `test/tree.test.ts` | A recursive **`childNodes`** (`many`) query over a real DOM tree materializes a nested view of Element + Text nodes that mirrors the DOM, matches a from-scratch `MemorySource` oracle, drills back up via **`parentNode`** (`one`), updates live on DOM append / in-place text edit / subtree removal, and **keeps node identity across a move** (id stable, only `parentId`/`order` change). |
 | `test/join.test.ts` | **Combining sources**: a single query joins the DOM-backed `node` source with a separate in-memory `label` source via `node.related('labels')`. Labels appear on the right nodes, update as the label source changes, and stay attached across DOM edits (the join is by stable node `id`). |
 | `test/tanstack.test.ts` | **TanStack Query as a source**: two independent TanStack queries (`users`, `teams`) joined via `user.related('team')`. The join is live as either query refetches (rename a team → every joined user updates; add/move a user → flows through), and plain `where`/`orderBy` works over a fetched collection. |
+| `test/bidirectional.test.ts` | **Bidirectional `collectionSource`** (`writeChange` hook): a flat DOM table where `source.push(...)` inserts/edits/removes a `<tr>` *and* raw DOM edits flow into the query — round-trip, with the outbound write **not** echoing back (a `sync` right after a push is a no-op). |
 
 ## How it works
 
@@ -156,9 +157,22 @@ every node by `nodeName`. Hit **refetch** and the “server” returns a differe
 every matching node updates through the join. So the demo joins **three kinds of source at
 once** — live DOM (`node`), in-memory (`label`), and async/remote (`tag`).
 
-The mental model: this is **Zero the query/IVM engine**, not Zero the sync engine. It's
-read/derive only (writes go through TanStack's mutations, then flow back in via `getRows`),
-filtering is client-side/post-fetch (push selectivity into the `queryKey`), and “loading”
+#### Bidirectional: the `writeChange` hook
+
+`getRows`/`subscribe` is the *inbound* edge (collection → Zero). Pass an optional
+**`writeChange`** and the source becomes **bidirectional** — a pushed change is propagated
+back *out* to the collection (insert a `<tr>`, fire a mutation, `setQueryData`, …). `push`
+advances the committed baseline *before* `writeChange` fires, so the observer's echoed `sync`
+finds nothing to do (no double-apply). [src/dom-table-source.ts](src/dom-table-source.ts)
+uses this to recover `DOMSource`'s bidirectional behavior — `source.push(...)` inserts a
+`<tr>` *and* editing the table flows into queries — on the simpler, indexed, non-destructive
+`collectionSource` foundation (the DOM is a *mirror* of the committed store rather than the
+store itself; see `test/bidirectional.test.ts`).
+
+The mental model: this is **Zero the query/IVM engine**, not Zero the sync engine. Without
+`writeChange` it's read/derive only (writes go through TanStack's mutations, then flow back
+in via `getRows`); filtering is client-side/post-fetch (push selectivity into the `queryKey`),
+and “loading”
 lives in TanStack (`isFetching`), since IVM has no loading state — an unresolved query just
 looks like an empty source. What you get is ZQL **joins, relationships, sorting, and derived
 incremental views** over data you fetched yourself.
